@@ -1,0 +1,53 @@
+# ai
+.claude/
+
+
+
+
+# Backend
+/backend/node_modules/
+/backend/dist/
+/backend/.env
+/backend/.venv/
+/backend/app/**/__pycache__/
+/backend/app/__pycache__
+/backend/data/*
+
+
+
+# Frontend
+/frontend/node_modules/
+/frontend/dist/
+.vite/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Root
+/node_modules/
+.ace-tool/
+
+# Generated caches/build artifacts
+**/__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+*.tsbuildinfo
+*.orig
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+backend/data/

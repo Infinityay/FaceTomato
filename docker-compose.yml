@@ -1,0 +1,23 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: career-copilot-backend
+    env_file:
+      - ./backend/.env
+    ports:
+      - "6522:6522"
+    volumes:
+      - ./backend/data:/app/data
+      - ./backend/.env:/app/.env:ro
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: career-copilot-frontend
+    depends_on:
+      - backend
+    ports:
+      - "5569:80"
+    restart: unless-stopped

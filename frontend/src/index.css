@@ -1,0 +1,209 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Folo Design System Colors - Light Mode */
+    --fo-bg: 0 0% 100%; /* White */
+    --fo-sidebar: 240 4.8% 95.9%; /* macOS Gray */
+    --fo-fg: 240 10% 3.9%; /* Zinc 900 */
+    --fo-fg-muted: 240 3.8% 46.1%; /* Zinc 500 */
+    
+    --fo-accent: 21.6 100% 50%; /* Orange #FF5C00 */
+    --fo-accent-fg: 0 0% 100%;
+
+    --fo-primary: 211 100% 50%; /* Apple Blue #007AFF */
+    --fo-primary-fg: 0 0% 100%;
+
+    --fo-border: 240 5.9% 90%; /* Zinc 200 */
+    --fo-input: 240 5.9% 90%;
+    
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    /* Folo Design System Colors - Dark Mode */
+    --fo-bg: 0 0% 7%; /* Deep Gray #121212 */
+    --fo-sidebar: 240 3.7% 15.9%; /* Slightly lighter gray */
+    --fo-fg: 0 0% 98%; /* Zinc 50 */
+    --fo-fg-muted: 240 5% 64.9%; /* Zinc 400 */
+
+    --fo-accent: 21.6 100% 50%; /* Orange #FF5C00 */
+    --fo-accent-fg: 0 0% 100%;
+
+    --fo-primary: 211 100% 45%; /* Apple Blue Dark #0A84FF */
+    --fo-primary-fg: 0 0% 100%;
+
+    --fo-border: 240 3.7% 15.9%; /* Zinc 800 */
+    --fo-input: 240 3.7% 15.9%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-theme-background text-theme-foreground antialiased;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  /* 
+   * macOS-like Scrollbar 
+   * Hidden by default, visible on hover/scrolling if possible 
+   */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+    background-color: transparent;
+  }
+
+  ::-webkit-scrollbar-track {
+    background-color: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: rgba(128, 128, 128, 0); /* Hidden by default */
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+    transition: background-color 0.2s;
+  }
+
+  /* Show thumb on hover of the container */
+  *:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(128, 128, 128, 0.4);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(128, 128, 128, 0.6);
+  }
+
+  /* Dark mode scrollbar */
+  .dark *:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.3);
+  }
+  
+  .dark ::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(255, 255, 255, 0.5);
+  }
+}
+
+@layer utilities {
+  .bg-material-thin {
+    @apply bg-white/50 backdrop-blur-md dark:bg-black/50;
+  }
+  
+  .bg-material-thick {
+    @apply bg-white/80 backdrop-blur-xl dark:bg-neutral-900/80;
+  }
+
+  /* Hide scrollbar utility */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@layer components {
+  .interview-markdown {
+    @apply whitespace-normal break-words text-sm leading-6;
+  }
+
+  .interview-markdown > * {
+    @apply my-0;
+  }
+
+  .interview-markdown > * + * {
+    @apply mt-3;
+  }
+
+  .interview-markdown h1 {
+    @apply text-xl font-semibold;
+  }
+
+  .interview-markdown h2 {
+    @apply text-lg font-semibold;
+  }
+
+  .interview-markdown h3 {
+    @apply text-base font-semibold;
+  }
+
+  .interview-markdown p {
+    @apply whitespace-pre-wrap;
+  }
+
+  .interview-markdown ul {
+    @apply list-disc pl-5;
+  }
+
+  .interview-markdown ol {
+    @apply list-decimal pl-5;
+  }
+
+  .interview-markdown li + li {
+    @apply mt-1;
+  }
+
+  .interview-markdown blockquote {
+    @apply border-l-2 border-border pl-3 text-muted-foreground;
+  }
+
+  .interview-markdown a {
+    @apply text-primary underline underline-offset-2;
+  }
+
+  .interview-markdown table {
+    @apply block max-w-full overflow-x-auto rounded-lg border;
+  }
+
+  .interview-markdown th,
+  .interview-markdown td {
+    @apply border px-2 py-1 text-left align-top;
+  }
+
+  .interview-markdown code {
+    @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.85em];
+  }
+
+  .interview-markdown pre {
+    @apply overflow-x-auto rounded-lg border border-border bg-black/85 p-3 text-zinc-100;
+  }
+
+  .interview-markdown pre code {
+    @apply bg-transparent p-0 text-inherit;
+  }
+
+  .interview-markdown-user,
+  .interview-markdown-user a {
+    @apply text-primary-foreground;
+  }
+
+  .interview-markdown-user blockquote {
+    @apply border-primary-foreground/50 text-primary-foreground/90;
+  }
+
+  .interview-markdown-user code {
+    @apply bg-white/20 text-primary-foreground;
+  }
+
+  .interview-markdown-user pre {
+    @apply border-white/20 bg-black/25 text-primary-foreground;
+  }
+
+  /* Assistant message markdown */
+  .interview-markdown-assistant {
+    @apply text-foreground;
+  }
+}

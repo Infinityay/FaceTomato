@@ -1,0 +1,1 @@
+"""Career-Copilot Backend Application."""
