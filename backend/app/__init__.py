@@ -1,1 +1,1 @@
-"""FaceTamato Backend Application."""
+"""FaceTomato Backend Application."""

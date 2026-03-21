@@ -14,7 +14,7 @@
 
 ## 模块职责
 
-`frontend/` 是 FaceTamato（面柿）的 React 单页应用，负责四类核心交互：
+`frontend/` 是 FaceTomato（面柿）的 React 单页应用，负责四类核心交互：
 
 - 简历上传、PDF/图片预览与结构化结果编辑
 - JD 输入、匹配分析、优化建议展示
