@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { fetchInterviewById } from "@/lib/interviewApi";
 import { AnimatePresence, motion } from "framer-motion";
 import { RotateCcw } from "lucide-react";
@@ -112,6 +112,7 @@ const getRuntimeConfig = (): RuntimeConfig => {
 };
 
 const MockInterviewPage = () => {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { parsedResume, parseStatus, setParsedResume } = useResumeStore();
   const { jdText, jdData, setJdText, setJdData } = useOptimizationStore();
@@ -366,6 +367,14 @@ const MockInterviewPage = () => {
     downloadTextFile(`mock-interview-transcript-${snapshot.sessionId}-${timestamp}.md`, markdown, "text/markdown;charset=utf-8");
   }, [buildLocalSnapshot]);
 
+  const handleCloseJdDialog = useCallback(() => {
+    if (isPlanningInterview) {
+      return;
+    }
+    setShowJdDialog(false);
+    setPendingJdText(jdText);
+  }, [isPlanningInterview, jdText]);
+
   const refreshRecoverableInbox = useCallback(async () => {
     const localSessions = getRecoverableSessions();
     if (localSessions.length === 0) {
@@ -614,7 +623,7 @@ const MockInterviewPage = () => {
   }, [activePendingSession, searchParams, setCreatingStep, setSearchParams]);
 
   if (parseStatus === "parsing") {
-    return <ResumeParsingState />;
+    return <ResumeParsingState actionLabel="查看解析进度" onAction={() => navigate("/resume")} />;
   }
 
   if (!parsedResume && !sessionId && recoveryChecked && recoverableSessions.length === 0) {
@@ -1204,7 +1213,14 @@ const MockInterviewPage = () => {
       )}
 
       {showJdDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4 backdrop-blur-sm">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4 backdrop-blur-sm"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              handleCloseJdDialog();
+            }
+          }}
+        >
           <Card role="dialog" aria-modal="true" aria-labelledby="jd-dialog-title" className="relative w-full max-w-2xl bg-material-thick">
             <CardHeader>
               <CardTitle id="jd-dialog-title">请先填写岗位 JD</CardTitle>
@@ -1224,6 +1240,9 @@ const MockInterviewPage = () => {
                 />
               </div>
               <div className="flex flex-wrap justify-end gap-2">
+                <Button variant="ghost" onClick={handleCloseJdDialog} disabled={isPlanningInterview}>
+                  取消
+                </Button>
                 <Button onClick={handleSaveJdAndStart} disabled={pendingJdText.trim().length === 0 || isPlanningInterview}>
                   保存 JD 并开始
                 </Button>

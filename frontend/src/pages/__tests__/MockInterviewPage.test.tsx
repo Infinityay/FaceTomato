@@ -551,6 +551,19 @@ describe("MockInterviewPage", () => {
 
     expect(screen.getByText("正在解析简历")).toBeInTheDocument();
     expect(screen.getByText("请稍候，系统正在提取并结构化您的简历内容")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "查看解析进度" })).toBeInTheDocument();
+  });
+
+  it("navigates to resume page from parsing state action", async () => {
+    const user = userEvent.setup();
+    useResumeStore.setState({ parsedResume: null, parseStatus: "parsing", parseError: null });
+
+    renderPage();
+
+    await user.click(screen.getByRole("button", { name: "查看解析进度" }));
+
+    expect(screen.getByTestId("location-display")).toHaveTextContent("/resume");
+    expect(screen.getByText("Resume Page")).toBeInTheDocument();
   });
 
   it("navigates to resume page only after clicking the resume prompt action", async () => {
@@ -637,6 +650,43 @@ describe("MockInterviewPage", () => {
     const dialog = screen.getByRole("dialog", { name: "请先填写岗位 JD" });
     expect(dialog).toBeInTheDocument();
     expect(within(dialog).getByText("模拟面试必须先解析岗位 JD 信息，才能生成更贴近目标岗位的面试计划。")).toBeInTheDocument();
+  });
+
+  it("allows closing the JD modal with the cancel button", async () => {
+    const user = userEvent.setup();
+    useResumeStore.setState({ parsedResume: mockResume, parseStatus: "success" });
+
+    renderPage();
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "面试岗位类型" }), "校招");
+    await user.selectOptions(screen.getByRole("combobox", { name: "面试岗位领域" }), "前端开发");
+    await user.click(screen.getByRole("button", { name: "开始模拟面试" }));
+
+    expect(screen.getByRole("dialog", { name: "请先填写岗位 JD" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "取消" }));
+
+    expect(screen.queryByRole("dialog", { name: "请先填写岗位 JD" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "开始模拟面试" })).toBeInTheDocument();
+  });
+
+  it("allows closing the JD modal by clicking the overlay", async () => {
+    const user = userEvent.setup();
+    useResumeStore.setState({ parsedResume: mockResume, parseStatus: "success" });
+
+    renderPage();
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "面试岗位类型" }), "校招");
+    await user.selectOptions(screen.getByRole("combobox", { name: "面试岗位领域" }), "前端开发");
+    await user.click(screen.getByRole("button", { name: "开始模拟面试" }));
+
+    const dialog = screen.getByRole("dialog", { name: "请先填写岗位 JD" });
+    const overlay = dialog.parentElement;
+    expect(overlay).not.toBeNull();
+
+    await user.click(overlay!);
+
+    expect(screen.queryByRole("dialog", { name: "请先填写岗位 JD" })).not.toBeInTheDocument();
   });
 
   it("requires JD before starting interview and does not create session directly", async () => {
