@@ -2,7 +2,11 @@
 name = "face-tomato-backend"
 version = "0.1.0"
 description = "FaceTomato Backend - Resume Parser API"
+license = { text = "AGPL-3.0-only" }
 requires-python = ">=3.12,<3.13"
+classifiers = [
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+]
 dependencies = [
     "fastapi[standard]>=0.115.0",
     "uvicorn>=0.30.0",
