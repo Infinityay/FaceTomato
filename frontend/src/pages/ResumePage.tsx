@@ -187,7 +187,6 @@ const ResumePage = () => {
           const renderTask = page.render({
             canvasContext: context,
             viewport: renderViewport,
-            canvas,
           });
           await renderTask.promise;
         }

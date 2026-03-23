@@ -4,13 +4,13 @@
 
 ### FaceTomato · AI 辅助简历分析与模拟面试系统
 
-<img src="./assets/facetomato.png" alt="FaceTomato preview" width="880" />
+<img src="./assets/facetomato_new.jpg" alt="FaceTomato preview" width="880" />
 
-[![GitHub stars](https://img.shields.io/github/stars/Infinityay/FaceTamato?style=flat-square)](https://github.com/Infinityay/FaceTamato/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/Infinityay/FaceTomato?style=flat-square)](https://github.com/Infinityay/FaceTamato/stargazers)
 [![Frontend](https://img.shields.io/badge/Frontend-React%2018%20%2B%20TypeScript-blue?style=flat-square)]()
 [![Backend](https://img.shields.io/badge/Backend-FastAPI%20%2B%20LangChain-green?style=flat-square)]()
 [![Storage](https://img.shields.io/badge/Storage-SQLite%20%2B%20Local%20Index-orange?style=flat-square)]()
-[![License](https://img.shields.io/github/license/Infinityay/FaceTamato?style=flat-square)](https://github.com/Infinityay/FaceTamato/blob/main/LICENSE)
+[![License](https://img.shields.io/github/license/Infinityay/FaceTomato?style=flat-square)](https://github.com/Infinityay/FaceTomato/blob/main/LICENSE)
 
 
 </div>
@@ -362,4 +362,10 @@ FaceTomato/
 
 ## 📈 Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Infinityay/FaceTamato&type=Date)](https://www.star-history.com/#Infinityay/FaceTamato&Date)
+<a href="https://www.star-history.com/?repos=Infinityay%2FFaceTomato&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=Infinityay/FaceTomato&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=Infinityay/FaceTomato&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=Infinityay/FaceTomato&type=date&legend=top-left" />
+ </picture>
+</a>
