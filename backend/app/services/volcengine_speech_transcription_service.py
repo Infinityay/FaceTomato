@@ -94,7 +94,7 @@ class VolcengineProtocolMixin:
         )
         payload = {
             "user": {
-                "uid": "face-tamato",
+                "uid": "face-tomato",
             },
             "audio": {
                 "format": "pcm",
