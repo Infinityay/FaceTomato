@@ -16,8 +16,8 @@ import type {
   ReviewTopic,
 } from "../types/interviewReview";
 
-const REPORT_STORAGE_KEY = "career-copilot-interview-review-reports-v2";
-const CONVERSATION_STORAGE_KEY = "career-copilot-interview-review-conversations-v2";
+const REPORT_STORAGE_KEY = "face-tomato-interview-review-reports-v2";
+const CONVERSATION_STORAGE_KEY = "face-tomato-interview-review-conversations-v2";
 
 type StoredReports = Record<string, ReviewSessionDetail>;
 type StoredConversations = Record<string, ReviewConversationMessage[]>;

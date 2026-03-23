@@ -916,14 +916,26 @@ const App = () => {
 
           <main className="main-content flex-1 overflow-y-auto scrollbar-hide p-4 md:p-6">
             <div className="mx-auto h-full max-w-7xl">
-              <Routes>
-                <Route path="/" element={<ResumePage />} />
-                <Route path="/resume" element={<ResumePage />} />
-                <Route path="/diagnosis" element={<DiagnosisPage />} />
-                <Route path="/questions" element={<QuestionBankPage />} />
-                <Route path="/interview" element={<MockInterviewPage />} />
-                <Route path="/interview-review" element={<InterviewReviewPage />} />
-              </Routes>
+              <Suspense
+                fallback={
+                  <div
+                    className="flex h-full min-h-[12rem] items-center justify-center rounded-2xl border border-dashed border-border/70 bg-muted/20 px-6 py-10 text-sm text-muted-foreground"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    页面加载中...
+                  </div>
+                }
+              >
+                <Routes>
+                  <Route path="/" element={<ResumePage />} />
+                  <Route path="/resume" element={<ResumePage />} />
+                  <Route path="/diagnosis" element={<DiagnosisPage />} />
+                  <Route path="/questions" element={<QuestionBankPage />} />
+                  <Route path="/interview" element={<MockInterviewPage />} />
+                  <Route path="/interview-review" element={<InterviewReviewPage />} />
+                </Routes>
+              </Suspense>
             </div>
           </main>
         </div>

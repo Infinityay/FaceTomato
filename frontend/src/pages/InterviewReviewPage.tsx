@@ -97,7 +97,13 @@ const getMatchedAnswerState = (status: ReviewMatchedAnswer["status"] | undefined
 const buildAnswerComparison = (topic: ReviewTopic) => {
   const explicitMatches = topic.matchedAnswers;
   const focusPoints = topic.assessmentFocus.map((focus) => ({ label: focus, keywords: [] }));
-  const matches = explicitMatches.length > 0
+  const matches: Array<{
+    point: RubricPoint;
+    matchedAnswerIndex: number;
+    matchedAnswer: string | null;
+    status: ReviewMatchedAnswer["status"];
+    reason: string | undefined;
+  }> = explicitMatches.length > 0
     ? focusPoints.map((point, index) => {
         const explicitMatch =
           explicitMatches.find((item) => item.point === point.label) ??

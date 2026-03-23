@@ -23,7 +23,6 @@ vi.stubGlobal(
 );
 
 const snapshot = {
-  snapshotVersion: 3,
   sessionId: "session-1",
   interviewType: "实习",
   category: "大模型算法",
@@ -172,7 +171,7 @@ describe("InterviewReviewPage", () => {
     localStorage.clear();
     fetchMock.mockReset();
     localStorage.setItem(
-      "career-copilot-mock-interview-recoverable-sessions",
+      "face-tomato-mock-interview-recoverable-sessions",
       JSON.stringify([{ snapshot }])
     );
   });

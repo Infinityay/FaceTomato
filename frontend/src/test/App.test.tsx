@@ -11,17 +11,28 @@ import { useOptimizationStore } from "../store/optimizationStore";
 import { useMockInterviewStore } from "../store/mockInterviewStore";
 import { useSessionStore, useThemeStore } from "../store/sessionStore";
 
+const pageDoubles = vi.hoisted(() => ({
+  resume: vi.fn(() => <div>Resume Page</div>),
+  diagnosis: vi.fn(() => <div>Diagnosis Page</div>),
+  questionBank: vi.fn(() => <div>Question Bank Page</div>),
+  mockInterview: vi.fn(() => <div>Mock Interview Page</div>),
+  interviewReview: vi.fn(() => <div>Interview Review Page</div>),
+}));
+
 vi.mock("../pages/ResumePage", () => ({
-  default: () => <div>Resume Page</div>,
+  default: pageDoubles.resume,
 }));
 vi.mock("../pages/DiagnosisPage", () => ({
-  default: () => <div>Diagnosis Page</div>,
+  default: pageDoubles.diagnosis,
 }));
 vi.mock("../pages/QuestionBankPage", () => ({
-  default: () => <div>Question Bank Page</div>,
+  default: pageDoubles.questionBank,
 }));
 vi.mock("../pages/MockInterviewPage", () => ({
-  default: () => <div>Mock Interview Page</div>,
+  default: pageDoubles.mockInterview,
+}));
+vi.mock("../pages/InterviewReviewPage", () => ({
+  default: pageDoubles.interviewReview,
 }));
 
 const mockMatchMedia = vi.fn().mockImplementation((query: string) => ({
@@ -53,10 +64,32 @@ const renderApp = () =>
     </MemoryRouter>
   );
 
+const resetPageDoubles = () => {
+  pageDoubles.resume.mockReset();
+  pageDoubles.resume.mockImplementation(() => <div>Resume Page</div>);
+  pageDoubles.diagnosis.mockReset();
+  pageDoubles.diagnosis.mockImplementation(() => <div>Diagnosis Page</div>);
+  pageDoubles.questionBank.mockReset();
+  pageDoubles.questionBank.mockImplementation(() => <div>Question Bank Page</div>);
+  pageDoubles.mockInterview.mockReset();
+  pageDoubles.mockInterview.mockImplementation(() => <div>Mock Interview Page</div>);
+  pageDoubles.interviewReview.mockReset();
+  pageDoubles.interviewReview.mockImplementation(() => <div>Interview Review Page</div>);
+};
+
+const createDeferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolver) => {
+    resolve = resolver;
+  });
+  return { promise, resolve };
+};
+
 describe("App runtime settings", () => {
   beforeEach(() => {
     localStorage.clear();
     sessionStorage.clear();
+    resetPageDoubles();
 
     useRuntimeSettingsStore.setState({
       modelProvider: "",
@@ -185,5 +218,31 @@ describe("App runtime settings", () => {
     expect(screen.getByLabelText("GLM OCR API Key")).toHaveValue("");
     expect(screen.getByLabelText("Doubao App Key")).toHaveValue("");
     expect(screen.getAllByText("默认").length).toBeGreaterThan(0);
+  });
+
+  it("shows a route fallback when a sidebar navigation suspends", async () => {
+    const user = userEvent.setup();
+    const deferred = createDeferred();
+    let diagnosisReady = false;
+
+    pageDoubles.diagnosis.mockImplementation(() => {
+      if (!diagnosisReady) {
+        throw deferred.promise;
+      }
+
+      return <div>Diagnosis Page</div>;
+    });
+
+    renderApp();
+
+    await screen.findByText("Resume Page");
+    await user.click(screen.getByRole("link", { name: "简历优化" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("页面加载中");
+
+    diagnosisReady = true;
+    deferred.resolve();
+
+    expect(await screen.findByText("Diagnosis Page")).toBeInTheDocument();
   });
 });

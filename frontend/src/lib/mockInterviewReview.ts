@@ -1,5 +1,10 @@
 import type { ReviewSession } from "../types/interviewReview";
 
+const withAssessmentFocus = <T extends { highlightedPoints: string[] }>(topic: T) => ({
+  ...topic,
+  assessmentFocus: topic.highlightedPoints,
+});
+
 export const reviewSessions: ReviewSession[] = [
   {
     id: "session-frontend-1",
@@ -16,7 +21,7 @@ export const reviewSessions: ReviewSession[] = [
     risks: ["性能优化案例深度一般", "高并发场景拆解略快", "监控闭环展开不够完整"],
     priority: "优先补强性能优化与线上定位能力。",
     topics: [
-      {
+      withAssessmentFocus({
         id: "topic-react-performance",
         name: "React 性能优化",
         domain: "前端框架",
@@ -48,8 +53,8 @@ export const reviewSessions: ReviewSession[] = [
         ],
         optimizedAnswer:
           "我会先界定问题发生在加载、渲染还是交互阶段，再结合 Web Vitals 和埋点数据锁定关键指标。随后使用 DevTools Performance 与 React Profiler 找出长任务、重复渲染和大体积资源，最后再根据瓶颈选择代码分割、虚拟列表、缓存和状态下沉，并给出优化前后的指标对比。"
-      },
-      {
+      }),
+      withAssessmentFocus({
         id: "topic-state-management",
         name: "复杂状态管理",
         domain: "工程设计",
@@ -80,8 +85,8 @@ export const reviewSessions: ReviewSession[] = [
         ],
         optimizedAnswer:
           "我会先按生命周期拆分状态，把服务端数据交给专门的数据层管理，把短生命周期的 UI 状态保留在组件附近。对异步流程增加取消机制或版本号校验，避免旧结果覆盖新状态；对跨模块共享数据则通过只读 selector 暴露，减少多点写入带来的不一致。"
-      },
-      {
+      }),
+      withAssessmentFocus({
         id: "topic-system-design",
         name: "前端监控与排障",
         domain: "线上稳定性",
@@ -113,8 +118,8 @@ export const reviewSessions: ReviewSession[] = [
         ],
         optimizedAnswer:
           "我会先确认问题是否与最近发布相关，并按版本、浏览器、系统和入口路径分桶定位影响面。随后结合白屏检测、JS 错误、资源加载失败和路由切换日志还原链路，必要时快速灰度回滚；同时准备兜底页和错误恢复入口，保证用户仍可继续操作。"
-      },
-      {
+      }),
+      withAssessmentFocus({
         id: "topic-project-ownership",
         name: "项目负责人能力",
         domain: "项目经验",
@@ -142,7 +147,7 @@ export const reviewSessions: ReviewSession[] = [
         ],
         optimizedAnswer:
           "我会按背景、目标、动作、结果和复盘来讲，重点说明自己如何定义优先级、协调依赖团队，并通过阶段性指标验证方案有效性。这样既能体现推动能力，也能让结果更有说服力。"
-      }
+      })
     ]
   },
   {
@@ -160,7 +165,7 @@ export const reviewSessions: ReviewSession[] = [
     risks: ["数据归因不够深入", "实验设计意识偏弱", "优先级判断标准不够明确"],
     priority: "优先补强数据分析与实验设计表达。",
     topics: [
-      {
+      withAssessmentFocus({
         id: "topic-user-growth",
         name: "用户增长拆解",
         domain: "增长分析",
@@ -185,8 +190,8 @@ export const reviewSessions: ReviewSession[] = [
         followUps: ["如果没有埋点，你会先补哪些关键事件？"],
         optimizedAnswer:
           "我会先确认下降是全量还是局部分群问题，再用注册到次日关键行为链路定位流失区间，结合渠道、版本和首日行为差异做归因。若怀疑 onboarding 或激励机制变化，再通过灰度或实验验证假设。"
-      },
-      {
+      }),
+      withAssessmentFocus({
         id: "topic-campaign-review",
         name: "活动复盘",
         domain: "运营执行",
@@ -210,8 +215,8 @@ export const reviewSessions: ReviewSession[] = [
         followUps: ["如果活动数据很好但复购很差，你会如何解释？"],
         optimizedAnswer:
           "我会先对照活动目标看核心指标是否达成，再把流量质量、转化效率和后续留存拆开，避免被单一拉新量误导。最后结合成本和用户质量评估 ROI，确认是否值得规模化复制。"
-      },
-      {
+      }),
+      withAssessmentFocus({
         id: "topic-cross-team",
         name: "跨部门协作",
         domain: "通用能力",
@@ -238,8 +243,8 @@ export const reviewSessions: ReviewSession[] = [
         followUps: ["如果关键方始终不配合，你会怎么做？"],
         optimizedAnswer:
           "我会先把争议从立场问题转成目标和约束问题，明确每一方最担心的风险，再把方案拆成可执行阶段，先推进共识最高的一步。这样既能降低协作阻力，也能通过阶段结果反向争取资源。"
-      },
-      {
+      }),
+      withAssessmentFocus({
         id: "topic-data-thinking",
         name: "数据分析表达",
         domain: "数据能力",
@@ -266,7 +271,7 @@ export const reviewSessions: ReviewSession[] = [
         followUps: ["如何区分相关性和因果性？"],
         optimizedAnswer:
           "我会先明确数据来源、观察周期和核心口径，先确认问题是否稳定存在，再找出影响最大的环节并设计验证动作。最后不仅说明结果变好了，还要说明为什么可以判断这次优化是有效的。"
-      }
+      })
     ]
   }
 ];

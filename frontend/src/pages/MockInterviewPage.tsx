@@ -324,14 +324,14 @@ const MockInterviewPage = () => {
         messages: overrides.messages ?? sourceState.messages,
         developerContext: overrides.developerContext ?? sourceState.developerContext ?? null,
         developerTrace: overrides.developerTrace ?? sourceState.developerTrace,
-        runtimeConfig,
+        runtimeConfig: getRuntimeConfig(),
         resumeFingerprint: sourceState.resumeFingerprint ?? "frontend-only",
         createdAt: overrides.createdAt ?? new Date(sourceState.startedAtMs || Date.now()).toISOString(),
         lastActiveAt: overrides.lastActiveAt ?? new Date().toISOString(),
         expiresAt: overrides.expiresAt ?? sourceState.expiresAt ?? new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
       };
     },
-    [jdData, jdText, parsedResume, runtimeConfig]
+    [jdData, jdText, parsedResume]
   );
 
   const persistSnapshot = useCallback(

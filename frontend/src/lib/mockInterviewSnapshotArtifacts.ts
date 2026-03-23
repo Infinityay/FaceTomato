@@ -143,6 +143,7 @@ function buildTopic(
     domain: buildTopicDomain(round.topic),
     score,
     coreQuestion: bucket.assistant[0] ?? round.description,
+    assessmentFocus: highlightedPoints,
     answerHighlights: fallbackAnswers,
     highlightedPoints,
     matchedAnswers: highlightedPoints.map((point, pointIndex) => ({
