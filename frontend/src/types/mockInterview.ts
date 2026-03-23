@@ -181,7 +181,6 @@ export interface RuntimeAwarePayload {
 }
 
 export interface MockInterviewSessionSnapshot {
-  snapshotVersion: 3;
   sessionId: string;
   interviewType: InterviewType;
   category: Category;
@@ -196,6 +195,7 @@ export interface MockInterviewSessionSnapshot {
   messages: MockInterviewMessage[];
   developerContext: MockInterviewDeveloperContext | null;
   developerTrace: MockInterviewDeveloperTraceEvent[];
+  runtimeConfig?: RuntimeConfig | null;
   resumeFingerprint: string;
   createdAt: string;
   lastActiveAt: string;

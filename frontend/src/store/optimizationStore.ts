@@ -1,11 +1,8 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 import type { JDData } from "../lib/api";
 
-import { createMigratingJSONStorage, legacyStorageKey } from "./persistStorage";
-
-const STORAGE_KEY = "face-tamato-optimization";
-const LEGACY_STORAGE_KEYS = [legacyStorageKey("optimization")];
+const STORAGE_KEY = "face-tomato-optimization";
 
 // ==================== Types ====================
 
@@ -149,7 +146,7 @@ interface OptimizationStore {
   setActiveTab: (tab: AnalysisTab) => void;
   setActiveSuggestionId: (id: string | null) => void;
   startAnalysis: () => void;
-  setJdData: (data: JDData) => void;
+  setJdData: (data: JDData | null) => void;
   setOverview: (overview: ResumeOverview) => void;
   setSuggestions: (suggestions: ResumeSuggestions) => void;
   setSuggestionsError: (error: string) => void;
@@ -232,7 +229,7 @@ export const useOptimizationStore = create<OptimizationStore>()(
     }),
     {
       name: STORAGE_KEY,
-      storage: createMigratingJSONStorage("session", STORAGE_KEY, LEGACY_STORAGE_KEYS),
+      storage: createJSONStorage(() => sessionStorage),
       partialize: (state) => ({
         status: state.status,
         jdText: state.jdText,

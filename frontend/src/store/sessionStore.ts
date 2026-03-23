@@ -1,7 +1,5 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
-
-import { createMigratingJSONStorage, legacyStorageKey } from "./persistStorage";
+import { createJSONStorage, persist } from "zustand/middleware";
 
 export type ResumeFile = {
   name: string;
@@ -13,10 +11,8 @@ export type ResumeFile = {
 
 export type Theme = "light" | "dark" | "system";
 
-const SESSION_STORAGE_KEY = "face-tamato-session";
-const LEGACY_SESSION_STORAGE_KEYS = [legacyStorageKey("session")];
-const THEME_STORAGE_KEY = "face-tamato-theme";
-const LEGACY_THEME_STORAGE_KEYS = [legacyStorageKey("theme")];
+const SESSION_STORAGE_KEY = "face-tomato-session";
+const THEME_STORAGE_KEY = "face-tomato-theme";
 
 type SessionState = {
   resumeFile: ResumeFile | null;
@@ -45,7 +41,7 @@ export const useSessionStore = create<SessionState>()(
     }),
     {
       name: SESSION_STORAGE_KEY,
-      storage: createMigratingJSONStorage("session", SESSION_STORAGE_KEY, LEGACY_SESSION_STORAGE_KEYS),
+      storage: createJSONStorage(() => sessionStorage),
       partialize: (state) => ({
         resumeFile: state.resumeFile
           ? {
@@ -72,7 +68,7 @@ export const useThemeStore = create<{
     }),
     {
       name: THEME_STORAGE_KEY,
-      storage: createMigratingJSONStorage("local", THEME_STORAGE_KEY, LEGACY_THEME_STORAGE_KEYS),
+      storage: createJSONStorage(() => localStorage),
     }
   )
 );

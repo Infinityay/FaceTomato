@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 import sqlite3
 
-import zvec
+import pytest
+
+try:
+    import zvec
+except ImportError:  # pragma: no cover - exercised in default install path
+    zvec = None
 
 from app.schemas.interview import Category, InterviewType
 from app.schemas.jd import JDData, JDBasicInfo, JDRequirements
@@ -154,6 +159,7 @@ class QueryRecordingCollection:
         return self.responses[index] if index < len(self.responses) else []
 
 
+@pytest.mark.skipif(zvec is None, reason="rag extra not installed")
 def test_build_collection_schema_supports_filters_and_vectors(tmp_path):
     schema = InterviewZvecIndexService.build_collection_schema(dense_dimension=4)
     assert schema.name == InterviewZvecIndexService.COLLECTION_NAME
@@ -161,6 +167,7 @@ def test_build_collection_schema_supports_filters_and_vectors(tmp_path):
     assert len(schema.vectors) == 2
 
 
+@pytest.mark.skipif(zvec is None, reason="rag extra not installed")
 def test_create_or_rebuild_index_and_retrieve_with_filters(tmp_path):
     conn = make_db(SAMPLE_ROWS)
     data_service = DataService(conn=conn)
@@ -200,6 +207,7 @@ def test_create_or_rebuild_index_and_retrieve_with_filters(tmp_path):
     assert results[0].fields["company"].startswith("阿里")
 
 
+@pytest.mark.skipif(zvec is None, reason="rag extra not installed")
 def test_retrieve_for_plan_returns_filtered_items_and_company_fallback(tmp_path):
     conn = make_db(SAMPLE_ROWS)
     data_service = DataService(conn=conn)
@@ -261,6 +269,7 @@ def test_retrieve_for_plan_returns_filtered_items_and_company_fallback(tmp_path)
     assert fallback_result.appliedFilters.interviewType is None
 
 
+@pytest.mark.skipif(zvec is None, reason="rag extra not installed")
 def test_retrieve_for_plan_fills_results_across_three_filter_levels(tmp_path, monkeypatch):
     conn = make_db(SAMPLE_ROWS)
     data_service = DataService(conn=conn)
@@ -344,6 +353,7 @@ def test_retrieve_for_plan_fills_results_across_three_filter_levels(tmp_path, mo
     assert result.appliedFilters.company is None
 
 
+@pytest.mark.skipif(zvec is None, reason="rag extra not installed")
 def test_retrieve_for_plan_stops_after_topk_is_filled(tmp_path, monkeypatch):
     conn = make_db(SAMPLE_ROWS)
     data_service = DataService(conn=conn)
@@ -465,6 +475,7 @@ def test_build_document_id_uses_stable_source_identity(tmp_path):
     assert document_id == index_service._build_document_id(same_identity_different_content)
 
 
+@pytest.mark.skipif(zvec is None, reason="rag extra not installed")
 def test_create_or_rebuild_index_writes_embedding_metadata(tmp_path, monkeypatch):
     conn = make_db(SAMPLE_ROWS)
     data_service = DataService(conn=conn)
@@ -477,7 +488,7 @@ def test_create_or_rebuild_index_writes_embedding_metadata(tmp_path, monkeypatch
     monkeypatch.setattr(
         rag_module,
         "build_interview_embedding_metadata",
-        lambda *, dense_document_dimension, dense_query_dimension=None: {
+        lambda settings=None, *, dense_document_dimension, dense_query_dimension=None: {
             "index_embedding": {
                 "dense": {"provider": "local_default", "dimension": dense_document_dimension},
                 "sparse": {"provider": "bm25", "language": "zh"},
@@ -497,6 +508,7 @@ def test_create_or_rebuild_index_writes_embedding_metadata(tmp_path, monkeypatch
     assert metadata["embedding"]["query_embedding"]["dense"]["provider"] == "local_hf_qwen3"
 
 
+@pytest.mark.skipif(zvec is None, reason="rag extra not installed")
 def test_ensure_index_rebuilds_when_index_embedding_metadata_changes(tmp_path, monkeypatch):
     conn = make_db(SAMPLE_ROWS)
     data_service = DataService(conn=conn)
@@ -531,7 +543,7 @@ def test_ensure_index_rebuilds_when_index_embedding_metadata_changes(tmp_path, m
     monkeypatch.setattr(
         rag_module,
         "build_interview_embedding_metadata",
-        lambda *, dense_document_dimension, dense_query_dimension=None: states[0],
+        lambda settings=None, *, dense_document_dimension, dense_query_dimension=None: states[0],
     )
     index_service.create_or_rebuild_index()
 
@@ -545,7 +557,7 @@ def test_ensure_index_rebuilds_when_index_embedding_metadata_changes(tmp_path, m
     monkeypatch.setattr(
         rag_module,
         "build_interview_embedding_metadata",
-        lambda *, dense_document_dimension, dense_query_dimension=None: states[1],
+        lambda settings=None, *, dense_document_dimension, dense_query_dimension=None: states[1],
     )
     monkeypatch.setattr(InterviewZvecIndexService, "create_or_rebuild_index", wrapped)
 
@@ -554,6 +566,7 @@ def test_ensure_index_rebuilds_when_index_embedding_metadata_changes(tmp_path, m
     assert rebuild_calls == ["rebuild"]
 
 
+@pytest.mark.skipif(zvec is None, reason="rag extra not installed")
 def test_ensure_index_ignores_query_only_embedding_metadata_changes(tmp_path, monkeypatch):
     conn = make_db(SAMPLE_ROWS)
     data_service = DataService(conn=conn)
@@ -588,7 +601,7 @@ def test_ensure_index_ignores_query_only_embedding_metadata_changes(tmp_path, mo
     monkeypatch.setattr(
         rag_module,
         "build_interview_embedding_metadata",
-        lambda *, dense_document_dimension, dense_query_dimension=None: states[0],
+        lambda settings=None, *, dense_document_dimension, dense_query_dimension=None: states[0],
     )
     index_service.create_or_rebuild_index()
 
@@ -596,7 +609,7 @@ def test_ensure_index_ignores_query_only_embedding_metadata_changes(tmp_path, mo
     monkeypatch.setattr(
         rag_module,
         "build_interview_embedding_metadata",
-        lambda *, dense_document_dimension, dense_query_dimension=None: states[1],
+        lambda settings=None, *, dense_document_dimension, dense_query_dimension=None: states[1],
     )
     monkeypatch.setattr(
         InterviewZvecIndexService,
@@ -607,6 +620,25 @@ def test_ensure_index_ignores_query_only_embedding_metadata_changes(tmp_path, mo
     index_service.ensure_index()
 
     assert rebuild_calls == []
+
+
+def test_get_interview_rag_service_requires_rag_extra_when_dependency_is_missing(monkeypatch):
+    rag_module.get_interview_rag_service.cache_clear()
+    rag_module._build_default_dense_document_embedding.cache_clear()
+    rag_module._build_default_dense_query_embedding.cache_clear()
+    rag_module._build_default_sparse_document_embedding.cache_clear()
+    rag_module._build_default_sparse_query_embedding.cache_clear()
+
+    monkeypatch.setattr(
+        rag_module,
+        "ensure_rag_dependencies_available",
+        lambda: (_ for _ in ()).throw(RuntimeError("Please install the backend rag optional dependency")),
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="rag optional dependency"):
+        rag_module.get_interview_rag_service()
+
 
 
 def test_get_interview_rag_service_uses_document_and_query_dense_builders(monkeypatch):
@@ -622,6 +654,7 @@ def test_get_interview_rag_service_uses_document_and_query_dense_builders(monkey
     rag_module._build_default_sparse_document_embedding.cache_clear()
     rag_module._build_default_sparse_query_embedding.cache_clear()
 
+    monkeypatch.setattr(rag_module, "ensure_rag_dependencies_available", lambda: None, raising=False)
     monkeypatch.setattr(rag_module, "_build_default_dense_document_embedding", lambda: dense_document)
     monkeypatch.setattr(rag_module, "_build_default_dense_query_embedding", lambda: dense_query)
     monkeypatch.setattr(rag_module, "_build_default_sparse_document_embedding", lambda: sparse_document)
@@ -662,8 +695,20 @@ def test_create_or_rebuild_index_inserts_docs_in_batches(tmp_path, monkeypatch):
         index_path=tmp_path / "interview_zvec",
     )
     collection = RecordingCollection()
-    monkeypatch.setattr(rag_module.zvec, "create_and_open", lambda *args, **kwargs: collection)
-    monkeypatch.setattr(rag_module.zvec, "OptimizeOption", lambda concurrency: {"concurrency": concurrency})
+    class FakeZvecModule:
+        @staticmethod
+        def create_and_open(*args, **kwargs):
+            return collection
+
+        @staticmethod
+        def OptimizeOption(concurrency):
+            return {"concurrency": concurrency}
+
+        @staticmethod
+        def Doc(**kwargs):
+            return kwargs
+
+    monkeypatch.setattr(rag_module, "_import_zvec", lambda: FakeZvecModule)
     monkeypatch.setattr(index_service, "build_collection_schema", lambda dense_dimension: object())
 
     stats = index_service.create_or_rebuild_index()

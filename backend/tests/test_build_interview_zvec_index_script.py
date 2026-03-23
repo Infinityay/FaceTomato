@@ -65,7 +65,7 @@ def test_build_settings_with_overrides_only_updates_explicit_values(monkeypatch)
         interview_sparse_embedding_provider="bm25",
         interview_sparse_embedding_language="zh",
     )
-    monkeypatch.setattr(script, "get_settings", lambda: base_settings)
+    monkeypatch.setattr(script, "get_settings", lambda settings=None: base_settings)
     args = argparse.Namespace(
         dense_provider="local_hf_qwen3",
         dense_model_name=None,
@@ -92,7 +92,7 @@ def test_build_settings_with_overrides_only_updates_explicit_values(monkeypatch)
 
 def test_build_settings_with_overrides_parses_dense_normalize_flag(monkeypatch):
     base_settings = Settings(interview_dense_embedding_normalize=True)
-    monkeypatch.setattr(script, "get_settings", lambda: base_settings)
+    monkeypatch.setattr(script, "get_settings", lambda settings=None: base_settings)
     args = argparse.Namespace(
         dense_provider=None,
         dense_model_name=None,
@@ -111,6 +111,19 @@ def test_build_settings_with_overrides_parses_dense_normalize_flag(monkeypatch):
     assert settings.interview_dense_embedding_normalize is False
 
 
+def test_main_fails_fast_when_rag_dependency_is_missing(monkeypatch):
+    monkeypatch.setattr(script, "parse_args", lambda settings=None: argparse.Namespace())
+    monkeypatch.setattr(
+        script,
+        "ensure_rag_dependencies_available",
+        lambda settings=None: (_ for _ in ()).throw(RuntimeError("Please install the backend rag optional dependency")),
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="rag optional dependency"):
+        script.main()
+
+
 def test_main_builds_document_side_embeddings(monkeypatch):
     build_calls: list[tuple[str, object]] = []
     fake_settings = Settings()
@@ -121,9 +134,10 @@ def test_main_builds_document_side_embeddings(monkeypatch):
     fake_sparse_document = object()
     recorded = {}
 
-    monkeypatch.setattr(script, "parse_args", lambda: argparse.Namespace())
+    monkeypatch.setattr(script, "parse_args", lambda settings=None: argparse.Namespace())
+    monkeypatch.setattr(script, "ensure_rag_dependencies_available", lambda settings=None: None, raising=False)
     monkeypatch.setattr(script, "_build_settings_with_overrides", lambda args: fake_settings)
-    monkeypatch.setattr(script, "get_data_service", lambda: fake_data_service)
+    monkeypatch.setattr(script, "get_data_service", lambda settings=None: fake_data_service)
     monkeypatch.setattr(script, "build_interview_corpus", lambda data_service: fake_corpus)
     monkeypatch.setattr(
         script,
@@ -142,10 +156,11 @@ def test_main_builds_document_side_embeddings(monkeypatch):
     )
 
     class FakeIndexService:
-        def __init__(self, *, dense_embedding_fn, sparse_document_embedding_fn, data_service):
+        def __init__(self, *, dense_embedding_fn, sparse_document_embedding_fn, data_service, settings):
             recorded["dense_embedding_fn"] = dense_embedding_fn
             recorded["sparse_document_embedding_fn"] = sparse_document_embedding_fn
             recorded["data_service"] = data_service
+            recorded["settings"] = settings
 
         def create_or_rebuild_index(self):
             return {"documents": 2}
@@ -159,3 +174,34 @@ def test_main_builds_document_side_embeddings(monkeypatch):
     assert build_calls[2] == ("sparse_document", fake_corpus, fake_settings)
     assert recorded["dense_embedding_fn"] is fake_dense_document
     assert recorded["sparse_document_embedding_fn"] is fake_sparse_document
+    assert recorded["settings"] is fake_settings
+
+
+def test_main_passes_cli_override_settings_into_index_service(monkeypatch):
+    fake_settings = Settings(
+        interview_dense_embedding_provider="local_default",
+        interview_sparse_embedding_provider="bm25",
+    )
+    recorded = {}
+
+    monkeypatch.setattr(script, "parse_args", lambda settings=None: argparse.Namespace())
+    monkeypatch.setattr(script, "ensure_rag_dependencies_available", lambda settings=None: None, raising=False)
+    monkeypatch.setattr(script, "_build_settings_with_overrides", lambda args: fake_settings)
+    monkeypatch.setattr(script, "get_data_service", lambda settings=None: object())
+    monkeypatch.setattr(script, "build_interview_corpus", lambda data_service: ["doc1"])
+    monkeypatch.setattr(script, "build_dense_document_embedding_from_settings", lambda settings: object())
+    monkeypatch.setattr(script, "build_dense_query_embedding_from_settings", lambda settings: object())
+    monkeypatch.setattr(script, "build_sparse_document_embedding_from_settings", lambda corpus, settings: object())
+
+    class FakeIndexService:
+        def __init__(self, *, dense_embedding_fn, sparse_document_embedding_fn, data_service, settings):
+            recorded["settings"] = settings
+
+        def create_or_rebuild_index(self):
+            return {"documents": 1}
+
+    monkeypatch.setattr(script, "InterviewZvecIndexService", FakeIndexService)
+
+    script.main()
+
+    assert recorded["settings"] is fake_settings

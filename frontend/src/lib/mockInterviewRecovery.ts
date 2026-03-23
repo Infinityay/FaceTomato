@@ -1,15 +1,11 @@
 import type {
-  MockInterviewDeveloperTraceEvent,
   MockInterviewPendingSession,
   MockInterviewSessionSnapshot,
 } from "@/types/mockInterview";
-import { legacyStorageKey, readStorageWithLegacyFallback } from "@/store/persistStorage";
 
-const STORAGE_KEY = "face-tamato-mock-interview-recoverable-sessions";
-const LEGACY_STORAGE_KEYS = [legacyStorageKey("mock", "interview", "recoverable", "sessions")];
-const PENDING_STORAGE_KEY = "face-tamato-mock-interview-pending-sessions";
-const LEGACY_PENDING_STORAGE_KEYS = [legacyStorageKey("mock", "interview", "pending", "sessions")];
-export const MOCK_INTERVIEW_RECOVERY_EVENT = "face-tamato:mock-interview-recovery-changed";
+const STORAGE_KEY = "face-tomato-mock-interview-recoverable-sessions";
+const PENDING_STORAGE_KEY = "face-tomato-mock-interview-pending-sessions";
+export const MOCK_INTERVIEW_RECOVERY_EVENT = "face-tomato:mock-interview-recovery-changed";
 
 export interface RecoverableSessionRecord {
   snapshot: MockInterviewSessionSnapshot;
@@ -19,68 +15,36 @@ export interface PendingSessionRecord {
   pending: MockInterviewPendingSession;
 }
 
-type LegacySnapshotV2 = Omit<MockInterviewSessionSnapshot, "snapshotVersion" | "developerContext" | "developerTrace"> & {
-  snapshotVersion: 2;
-  developerContext?: null;
-  developerTrace?: MockInterviewDeveloperTraceEvent[];
-};
-
-function isSnapshotV2(snapshot: unknown): snapshot is LegacySnapshotV2 {
+function isRecoverableSnapshot(snapshot: unknown): snapshot is MockInterviewSessionSnapshot {
   if (!snapshot || typeof snapshot !== "object") {
     return false;
   }
 
-  const candidate = snapshot as Partial<LegacySnapshotV2> & {
-    interviewPlan?: unknown;
-    interviewState?: unknown;
-    snapshotVersion?: unknown;
-  };
+  const candidate = snapshot as Partial<MockInterviewSessionSnapshot>;
 
   return (
-    candidate.snapshotVersion === 2 &&
     typeof candidate.sessionId === "string" &&
-    !!candidate.interviewPlan &&
-    !!candidate.interviewState
+    typeof candidate.interviewType === "string" &&
+    typeof candidate.category === "string" &&
+    typeof candidate.status === "string" &&
+    candidate.limits != null &&
+    typeof candidate.jdText === "string" &&
+    candidate.resumeSnapshot != null &&
+    candidate.retrieval != null &&
+    candidate.interviewPlan != null &&
+    candidate.interviewState != null &&
+    Array.isArray(candidate.messages) &&
+    Array.isArray(candidate.developerTrace) &&
+    typeof candidate.resumeFingerprint === "string" &&
+    typeof candidate.createdAt === "string" &&
+    typeof candidate.lastActiveAt === "string" &&
+    typeof candidate.expiresAt === "string"
   );
-}
-
-function isSnapshotV3(snapshot: unknown): snapshot is MockInterviewSessionSnapshot {
-  if (!snapshot || typeof snapshot !== "object") {
-    return false;
-  }
-
-  const candidate = snapshot as Partial<MockInterviewSessionSnapshot> & {
-    interviewPlan?: unknown;
-    interviewState?: unknown;
-    snapshotVersion?: unknown;
-    developerTrace?: unknown;
-  };
-
-  return (
-    candidate.snapshotVersion === 3 &&
-    typeof candidate.sessionId === "string" &&
-    !!candidate.interviewPlan &&
-    !!candidate.interviewState &&
-    Array.isArray(candidate.developerTrace)
-  );
-}
-
-function upgradeSnapshot(snapshot: LegacySnapshotV2 | MockInterviewSessionSnapshot): MockInterviewSessionSnapshot {
-  if (snapshot.snapshotVersion === 3) {
-    return snapshot;
-  }
-
-  return {
-    ...snapshot,
-    snapshotVersion: 3,
-    developerContext: snapshot.developerContext ?? null,
-    developerTrace: snapshot.developerTrace ?? [],
-  };
 }
 
 function readRecords(): RecoverableSessionRecord[] {
   try {
-    const raw = readStorageWithLegacyFallback("local", STORAGE_KEY, LEGACY_STORAGE_KEYS);
+    const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
       return [];
     }
@@ -88,9 +52,7 @@ function readRecords(): RecoverableSessionRecord[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed
-      .filter((item) => item && (isSnapshotV2(item.snapshot) || isSnapshotV3(item.snapshot)))
-      .map((item) => ({ snapshot: upgradeSnapshot(item.snapshot) }));
+    return parsed.filter((item) => item && isRecoverableSnapshot(item.snapshot));
   } catch {
     return [];
   }
@@ -105,7 +67,7 @@ function writeRecords(records: RecoverableSessionRecord[]) {
 
 function readPendingRecords(): PendingSessionRecord[] {
   try {
-    const raw = readStorageWithLegacyFallback("local", PENDING_STORAGE_KEY, LEGACY_PENDING_STORAGE_KEYS);
+    const raw = localStorage.getItem(PENDING_STORAGE_KEY);
     if (!raw) {
       return [];
     }
@@ -177,40 +139,14 @@ export function clearRecoverableSessions() {
   writePendingRecords([]);
 }
 
-export function clearLegacyRecoverableSessions() {
-  const raw = readStorageWithLegacyFallback("local", STORAGE_KEY, LEGACY_STORAGE_KEYS);
-  if (!raw) {
-    return false;
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      writeRecords([]);
-      return true;
-    }
-
-    const nextRecords = parsed
-      .filter((item) => item && (isSnapshotV2(item.snapshot) || isSnapshotV3(item.snapshot)))
-      .map((item) => ({ snapshot: upgradeSnapshot(item.snapshot) }));
-    const changed = nextRecords.length !== parsed.length || nextRecords.some((item) => item.snapshot.snapshotVersion !== parsed.find((entry) => entry?.snapshot?.sessionId === item.snapshot.sessionId)?.snapshot?.snapshotVersion);
-    if (changed) {
-      writeRecords(nextRecords);
-    }
-    return changed;
-  } catch {
-    writeRecords([]);
-    return true;
-  }
-}
-
 export function getRecoverableSessions(): RecoverableSessionRecord[] {
+  const allRecords = readRecords();
   const nowMs = Date.now();
-  const records = readRecords().filter((item) => {
+  const records = allRecords.filter((item) => {
     const expiresMs = new Date(item.snapshot.expiresAt).getTime();
     return Number.isFinite(expiresMs) && expiresMs > nowMs;
   });
-  if (records.length !== readRecords().length) {
+  if (records.length !== allRecords.length) {
     writeRecords(records);
   }
   return records;

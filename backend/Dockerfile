@@ -10,7 +10,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . .
-RUN pip install --no-cache-dir .
+
+ARG BACKEND_INSTALL_RAG=false
+RUN if [ "$BACKEND_INSTALL_RAG" = "true" ]; then \
+        pip install --no-cache-dir ".[rag]"; \
+    else \
+        pip install --no-cache-dir .; \
+    fi
 
 EXPOSE 6522
 

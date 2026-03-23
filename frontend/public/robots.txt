@@ -1,0 +1,20 @@
+User-agent: GPTBot
+Disallow: /questions
+
+User-agent: ChatGPT-User
+Disallow: /questions
+
+User-agent: ClaudeBot
+Disallow: /questions
+
+User-agent: Claude-Web
+Disallow: /questions
+
+User-agent: PerplexityBot
+Disallow: /questions
+
+User-agent: Google-Extended
+Disallow: /questions
+
+User-agent: *
+Allow: /

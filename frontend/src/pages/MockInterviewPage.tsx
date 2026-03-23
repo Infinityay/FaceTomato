@@ -19,7 +19,6 @@ import { streamCreateMockInterviewSession, streamMockInterviewReply } from "@/li
 import { buildMockInterviewTranscriptMarkdown } from "@/lib/mockInterviewDeveloperReport";
 import { downloadTextFile } from "@/lib/download";
 import {
-  clearLegacyRecoverableSessions,
   MOCK_INTERVIEW_RECOVERY_EVENT,
   getPendingSessionById,
   getPendingSessions,
@@ -240,10 +239,6 @@ const MockInterviewPage = () => {
   }, [isListening, startListening, stopListening]);
 
   useEffect(() => {
-    clearLegacyRecoverableSessions();
-  }, []);
-
-  useEffect(() => {
     void getSpeechStatus({ speechAppKey, speechAccessKey })
       .then((payload) => setSpeechAvailable(Boolean(payload?.available)))
       .catch(() => setSpeechAvailable(false));
@@ -290,6 +285,8 @@ const MockInterviewPage = () => {
         category: Category;
         retrieval: typeof sourceState.retrieval;
         jdText: string;
+        jdData: typeof jdData;
+        resumeSnapshot: typeof parsedResume;
         developerContext: typeof sourceState.developerContext;
         developerTrace: typeof sourceState.developerTrace;
       }> = {}
@@ -298,7 +295,9 @@ const MockInterviewPage = () => {
       const category = overrides.category ?? sourceState.selectedCategory;
       const resolvedPlan = overrides.interviewPlan ?? sourceState.interviewPlan;
       const resolvedState = overrides.interviewState ?? sourceState.interviewState;
-      if (!parsedResume || !interviewType || !category || !resolvedPlan || !resolvedState) {
+      const resolvedResumeSnapshot = overrides.resumeSnapshot ?? parsedResume;
+      const resolvedJdData = Object.prototype.hasOwnProperty.call(overrides, "jdData") ? (overrides.jdData ?? null) : jdData ?? null;
+      if (!resolvedResumeSnapshot || !interviewType || !category || !resolvedPlan || !resolvedState) {
         return null;
       }
 
@@ -311,21 +310,21 @@ const MockInterviewPage = () => {
             : "ready");
 
       return {
-        snapshotVersion: 3,
         sessionId: overrides.sessionId ?? sourceState.sessionId ?? "",
         interviewType,
         category,
         status: resolvedStatus,
         limits: sourceState.limits ?? defaultLimits,
         jdText: overrides.jdText ?? jdText,
-        jdData: jdData ?? null,
-        resumeSnapshot: parsedResume,
+        jdData: resolvedJdData,
+        resumeSnapshot: resolvedResumeSnapshot,
         retrieval: overrides.retrieval ?? sourceState.retrieval ?? emptyRetrieval,
         interviewPlan: resolvedPlan,
         interviewState: resolvedState,
         messages: overrides.messages ?? sourceState.messages,
         developerContext: overrides.developerContext ?? sourceState.developerContext ?? null,
         developerTrace: overrides.developerTrace ?? sourceState.developerTrace,
+        runtimeConfig: getRuntimeConfig(),
         resumeFingerprint: sourceState.resumeFingerprint ?? "frontend-only",
         createdAt: overrides.createdAt ?? new Date(sourceState.startedAtMs || Date.now()).toISOString(),
         lastActiveAt: overrides.lastActiveAt ?? new Date().toISOString(),
@@ -336,8 +335,11 @@ const MockInterviewPage = () => {
   );
 
   const persistSnapshot = useCallback(
-    (overrides: Parameters<typeof buildLocalSnapshot>[1] = {}) => {
-      const snapshot = buildLocalSnapshot(useMockInterviewStore.getState(), {
+    (
+      overrides: Parameters<typeof buildLocalSnapshot>[1] = {},
+      sourceState: ReturnType<typeof useMockInterviewStore.getState> = useMockInterviewStore.getState()
+    ) => {
+      const snapshot = buildLocalSnapshot(sourceState, {
         lastActiveAt: new Date().toISOString(),
         ...overrides,
       });
@@ -459,11 +461,25 @@ const MockInterviewPage = () => {
     setParsedResume(resumed.resumeSnapshot);
     setDeveloperContext(resumed.developerContext);
     restoreSessionFromSnapshot({ snapshot: resumed });
+    const restoredState = useMockInterviewStore.getState();
+    persistSnapshot(
+      {
+        sessionId: resumed.sessionId,
+        createdAt: resumed.createdAt,
+        expiresAt: resumed.expiresAt,
+        interviewType: resumed.interviewType,
+        category: resumed.category,
+        jdText: resumed.jdText ?? "",
+        jdData: resumed.jdData,
+        resumeSnapshot: resumed.resumeSnapshot,
+        developerContext: resumed.developerContext,
+        developerTrace: restoredState.developerTrace,
+      },
+      restoredState
+    );
     setStartedAt(Date.parse(resumed.createdAt));
     setJdText(resumed.jdText ?? "");
-    if (resumed.jdData) {
-      setJdData(resumed.jdData);
-    }
+    setJdData(resumed.jdData ?? null);
   }, [
     messages.length,
     resetSession,
@@ -497,11 +513,25 @@ const MockInterviewPage = () => {
       setParsedResume(resumed.resumeSnapshot);
       setDeveloperContext(resumed.developerContext);
       restoreSessionFromSnapshot({ snapshot: resumed });
+      const restoredState = useMockInterviewStore.getState();
+      persistSnapshot(
+        {
+          sessionId: resumed.sessionId,
+          createdAt: resumed.createdAt,
+          expiresAt: resumed.expiresAt,
+          interviewType: resumed.interviewType,
+          category: resumed.category,
+          jdText: resumed.jdText ?? "",
+          jdData: resumed.jdData,
+          resumeSnapshot: resumed.resumeSnapshot,
+          developerContext: resumed.developerContext,
+          developerTrace: restoredState.developerTrace,
+        },
+        restoredState
+      );
       setStartedAt(Date.parse(resumed.createdAt));
       setJdText(resumed.jdText ?? "");
-      if (resumed.jdData) {
-        setJdData(resumed.jdData);
-      }
+      setJdData(resumed.jdData ?? null);
       setRecoverableSessions([]);
     } catch (recoverError) {
       setError(recoverError instanceof Error ? recoverError.message : "恢复会话失败");
@@ -534,17 +564,39 @@ const MockInterviewPage = () => {
         }
         return;
       }
-      setActivePendingSession({
+
+      if (pendingRecord.pending.sessionId && getRecoverableSessionById(pendingRecord.pending.sessionId)) {
+        removePendingSession(targetPendingId);
+        setSearchParams({ session: pendingRecord.pending.sessionId }, { replace: true });
+        return;
+      }
+
+      const nextPendingSession = {
         pendingId: pendingRecord.pending.pendingId,
         sessionId: pendingRecord.pending.sessionId ?? null,
         interviewType: pendingRecord.pending.interviewType,
         category: pendingRecord.pending.category,
         creatingStep: pendingRecord.pending.creatingStep,
-      });
+      };
+      const alreadyLoadedPendingSession =
+        activePendingSession?.pendingId === nextPendingSession.pendingId &&
+        activePendingSession.sessionId === nextPendingSession.sessionId &&
+        activePendingSession.interviewType === nextPendingSession.interviewType &&
+        activePendingSession.category === nextPendingSession.category &&
+        activePendingSession.creatingStep === nextPendingSession.creatingStep &&
+        selectedInterviewType === nextPendingSession.interviewType &&
+        selectedCategory === nextPendingSession.category &&
+        creatingStep === nextPendingSession.creatingStep &&
+        sessionId == null;
+      if (alreadyLoadedPendingSession) {
+        return;
+      }
+
+      setActivePendingSession(nextPendingSession);
       resetSession();
-      setSelectedInterviewType(pendingRecord.pending.interviewType);
-      setSelectedCategory(pendingRecord.pending.category);
-      setCreatingStep(pendingRecord.pending.creatingStep);
+      setSelectedInterviewType(nextPendingSession.interviewType);
+      setSelectedCategory(nextPendingSession.category);
+      setCreatingStep(nextPendingSession.creatingStep);
       return;
     }
 
@@ -932,8 +984,7 @@ const MockInterviewPage = () => {
           }
           upsertRecoverableSession({
             snapshot: {
-              snapshotVersion: 3,
-              sessionId: createdSessionData.sessionId,
+                    sessionId: createdSessionData.sessionId,
               interviewType: createdSessionData.interviewType,
               category: createdSessionData.category,
               status: nextStatus,
@@ -1148,7 +1199,7 @@ const MockInterviewPage = () => {
                 onExportTranscript={handleExportTranscript}
               />
 
-              {status === "creating" && messages.length === 0 ? (
+              {isBusy && messages.length === 0 ? (
                 <div className="flex-1 p-4 md:p-6">
                   <LoadingState
                     title={currentCreatingMeta.title}

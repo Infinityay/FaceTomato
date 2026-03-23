@@ -315,3 +315,28 @@ class MockInterviewStreamRequest(BaseModel):
         if self.interviewState.currentRound > self.interviewPlan.total_rounds:
             raise ValueError("interviewState.currentRound cannot exceed interviewPlan.total_rounds")
         return self
+
+
+class MockInterviewSessionSnapshot(BaseModel):
+    """Frontend-local snapshot used as the single source for review generation."""
+
+    snapshotVersion: int = Field(default=3, ge=1)
+    sessionId: str
+    interviewType: InterviewType
+    category: Category
+    status: Literal["ready", "streaming", "completed", "expired"]
+    limits: MockInterviewSessionLimits
+    jdText: str = ""
+    jdData: JDData | None = None
+    resumeSnapshot: ResumeData
+    retrieval: MockInterviewRetrievalResult = Field(default_factory=MockInterviewRetrievalResult)
+    interviewPlan: MockInterviewPlan
+    interviewState: MockInterviewState
+    messages: list[MockInterviewMessage] = Field(default_factory=list)
+    developerContext: MockInterviewDeveloperContext | None = None
+    developerTrace: list[MockInterviewDeveloperTraceEvent] = Field(default_factory=list)
+    runtimeConfig: RuntimeConfig | None = None
+    resumeFingerprint: str = ""
+    createdAt: datetime
+    lastActiveAt: datetime
+    expiresAt: datetime

@@ -185,9 +185,10 @@ const ResumePage = () => {
           container.appendChild(wrapper);
 
           const renderTask = page.render({
+            canvas: null,
             canvasContext: context,
             viewport: renderViewport,
-          });
+          } as Parameters<typeof page.render>[0]);
           await renderTask.promise;
         }
       })

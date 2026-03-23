@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
     interviews,
+    interview_reviews,
     jd,
     jd_optimization,
     mock_interview,
@@ -50,6 +51,7 @@ app.include_router(jd.router, prefix="/api")
 app.include_router(resume_optimization.router, prefix="/api")
 app.include_router(jd_optimization.router, prefix="/api")
 app.include_router(interviews.router, prefix="/api")
+app.include_router(interview_reviews.router, prefix="/api")
 app.include_router(mock_interview.router, prefix="/api")
 app.include_router(speech.router, prefix="/api")
 

@@ -999,11 +999,73 @@ def test_init_enables_rag_when_flag_is_true_and_zvec_available(monkeypatch):
 
     monkeypatch.setattr(module, "get_settings", lambda: Settings(mock_interview_rag=True))
     monkeypatch.setattr(module, "_is_zvec_importable", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "_mock_interview_rag_dependencies_available",
+        lambda settings_fingerprint="default": True,
+        raising=False,
+    )
     monkeypatch.setattr(MockInterviewService, "_create_chat_model", lambda self, **kwargs: FakeChatModel([]))
 
     service = MockInterviewService()
 
     assert service._disable_rag is False
+
+
+def test_init_disables_rag_when_required_dependency_check_fails(monkeypatch):
+    import app.services.mock_interview_service as module
+
+    fallback_item = InterviewData(
+        id=11,
+        title="前端通用题",
+        content="浏览器渲染与网络",
+        publish_time="2025-01-01 10:00:00",
+        category=Category.FRONTEND,
+        source="mock",
+        source_id="fallback-1",
+        company="美团",
+        stage="一面",
+        result=InterviewResult.NULL,
+        interview_type=InterviewType.CAMPUS,
+    )
+    fake_data_service = FakeDataService({(InterviewType.CAMPUS.value, None): [fallback_item]})
+    fake_rag_service = FakeRagService(
+        MockInterviewRetrievalResult(
+            queryText="rag query",
+            appliedFilters=MockInterviewRetrievalFilters(category=Category.FRONTEND),
+            items=[],
+        )
+    )
+
+    monkeypatch.setattr(module, "get_settings", lambda: Settings(mock_interview_rag=True))
+    monkeypatch.setattr(module, "_is_zvec_importable", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "_mock_interview_rag_dependencies_available",
+        lambda settings_fingerprint="default": False,
+        raising=False,
+    )
+    monkeypatch.setattr(module, "get_data_service", lambda: fake_data_service)
+    monkeypatch.setattr(MockInterviewService, "_create_chat_model", lambda self, **kwargs: FakeChatModel([]))
+
+    service = MockInterviewService(rag_service=fake_rag_service)
+    context = RetrievalQueryContext(
+        category=Category.FRONTEND,
+        interview_type=InterviewType.CAMPUS,
+        resume_data=ResumeData(),
+        jd_text="熟悉 React",
+        jd_data=JDData(
+            basicInfo=JDBasicInfo(company="字节跳动", jobTitle="前端开发工程师"),
+            requirements=JDRequirements(),
+        ),
+    )
+
+    result = service._retrieve_interview_evidence(context)
+
+    assert service._disable_rag is True
+    assert service._build_developer_context().ragEnabled is False
+    assert fake_rag_service.calls == []
+    assert [item.interviewId for item in result.items] == [11]
 
 
 def test_retrieve_interview_evidence_non_rag_tiers_and_applied_filters(monkeypatch, service: MockInterviewService):

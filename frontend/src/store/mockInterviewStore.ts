@@ -1,7 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 import { produce } from "immer";
-import { createMigratingJSONStorage, legacyStorageKey } from "./persistStorage";
 import type {
   MockInterviewCreatingStep,
   MockInterviewDeveloperContext,
@@ -18,8 +17,7 @@ import type {
 } from "@/types/mockInterview";
 import type { Category, InterviewType } from "@/types/interview";
 
-const STORAGE_KEY = "face-tamato-mock-interview";
-const LEGACY_STORAGE_KEYS = [legacyStorageKey("mock", "interview")];
+const STORAGE_KEY = "face-tomato-mock-interview";
 
 interface MockInterviewStore {
   sessionId: string | null;
@@ -144,25 +142,51 @@ export const useMockInterviewStore = create<MockInterviewStore>()(
         })),
 
       restoreSessionFromSnapshot: ({ snapshot }) =>
-        set({
-          sessionId: snapshot.sessionId,
-          resumeFingerprint: snapshot.resumeFingerprint,
-          expiresAt: snapshot.expiresAt,
-          lastActiveAt: snapshot.lastActiveAt,
-          status: snapshot.status === "expired" ? "error" : (snapshot.status as MockInterviewStatus),
-          messages: snapshot.messages,
-          streamingMessageId: null,
-          pendingAssistantPhase: "idle",
-          selectedInterviewType: snapshot.interviewType,
-          selectedCategory: snapshot.category,
-          limits: snapshot.limits,
-          interviewPlan: snapshot.interviewPlan,
-          interviewState: snapshot.interviewState,
-          retrieval: snapshot.retrieval,
-          developerContext: snapshot.developerContext,
-          developerTrace: snapshot.developerTrace,
-          draftMessage: "",
-          error: null,
+        set(() => {
+          const lastMessage = snapshot.messages[snapshot.messages.length - 1];
+          const previousMessage = snapshot.messages[snapshot.messages.length - 2];
+          const recoveringInterruptedReply =
+            snapshot.status === "streaming" &&
+            (lastMessage?.role === "user" || (lastMessage?.role === "assistant" && previousMessage?.role === "user"));
+          const recoveringInterruptedAssistant = snapshot.status === "streaming" && lastMessage?.role === "assistant";
+          const restoredMessages = recoveringInterruptedReply
+            ? snapshot.messages.slice(0, lastMessage?.role === "assistant" ? -2 : -1)
+            : recoveringInterruptedAssistant
+              ? snapshot.messages.slice(0, -1)
+              : snapshot.messages;
+          const restoredInterviewState = recoveringInterruptedReply
+            ? {
+                ...snapshot.interviewState,
+                turnCount: Math.max(0, snapshot.interviewState.turnCount - 1),
+                reflectionHistory: snapshot.interviewState.reflectionHistory.slice(0, -1),
+              }
+            : snapshot.interviewState;
+
+          return {
+            sessionId: snapshot.sessionId,
+            resumeFingerprint: snapshot.resumeFingerprint,
+            expiresAt: snapshot.expiresAt,
+            lastActiveAt: snapshot.lastActiveAt,
+            status:
+              snapshot.status === "expired"
+                ? "error"
+                : snapshot.status === "completed"
+                  ? "completed"
+                  : "ready",
+            messages: restoredMessages,
+            streamingMessageId: null,
+            pendingAssistantPhase: "idle",
+            selectedInterviewType: snapshot.interviewType,
+            selectedCategory: snapshot.category,
+            limits: snapshot.limits,
+            interviewPlan: snapshot.interviewPlan,
+            interviewState: restoredInterviewState,
+            retrieval: snapshot.retrieval,
+            developerContext: snapshot.developerContext,
+            developerTrace: snapshot.developerTrace,
+            draftMessage: "",
+            error: null,
+          };
         }),
 
       appendUserMessage: (message) =>
@@ -269,7 +293,7 @@ export const useMockInterviewStore = create<MockInterviewStore>()(
     }),
     {
       name: STORAGE_KEY,
-      storage: createMigratingJSONStorage("local", STORAGE_KEY, LEGACY_STORAGE_KEYS),
+      storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         sessionId: state.sessionId,
         resumeFingerprint: state.resumeFingerprint,

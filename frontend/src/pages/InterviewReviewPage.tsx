@@ -1,0 +1,392 @@
+
+import type { KeyboardEvent } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Loader2,
+  ArrowLeft,
+  ChevronRight,
+  Sparkles,
+  Send,
+  Mic,
+  CheckCircle2,
+  TriangleAlert,
+} from "lucide-react";
+import {
+  fetchInterviewReviewSessionById,
+  fetchInterviewReviewSessions,
+  generateInterviewReviewReport,
+  getInterviewReviewSessionDetailSnapshot,
+  getInterviewReviewSessionsSnapshot,
+  optimizeInterviewReviewTopic,
+} from "../lib/interviewReviewApi";
+import type {
+  ReviewChatMessage,
+  ReviewMatchedAnswer,
+  ReviewReportStatus,
+  ReviewSessionDetail,
+  ReviewSessionListItem,
+  ReviewTopic,
+} from "../types/interviewReview";
+import { cn } from "../lib/utils";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Textarea } from "../components/ui/textarea";
+import { useRuntimeSettingsStore } from "../store/runtimeSettingsStore";
+
+type RubricPoint = { label: string; keywords: string[] };
+
+const getDefaultTopicId = (session: ReviewSessionDetail | null | undefined) => {
+  if (!session) return null;
+  return session.topics.find((topic) => topic.id === session.defaultSelectedTopicId)?.id ?? session.topics[0]?.id ?? null;
+};
+
+const getScoreBadgeTone = (score: number) => {
+  if (score >= 80) return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+  if (score >= 60) return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+  return "border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300";
+};
+
+const topicRubrics: Record<string, RubricPoint[]> = {
+  "topic-react-performance": [
+    { label: "Performance baseline", keywords: ["metric", "baseline", "lcp", "inp", "cls"] },
+    { label: "Bottleneck tooling", keywords: ["network", "performance", "profiler", "devtools"] },
+    { label: "Rendering and loading", keywords: ["lazy", "split", "virtual", "render", "resource"] },
+  ],
+};
+
+const genericRubricFallback = (topic: ReviewTopic): RubricPoint[] => [
+  { label: "Framework completeness", keywords: topic.coreQuestion.slice(0, 8).split("") },
+  { label: "Tools and methods", keywords: topic.answerHighlights.join(" ").split(" ").slice(0, 3) },
+  { label: "Results and optimization", keywords: topic.suggestions.join(" ").split(" ").slice(0, 3) },
+];
+
+const getMatchedAnswerState = (status: ReviewMatchedAnswer["status"] | undefined, matchedAnswer: string | null) => {
+  if (status === "incomplete") {
+    return {
+      matched: false,
+      tone: "warning",
+      message: "该回答只覆盖了部分要点，关键子问题没有答完整，建议直接补全缺失部分。",
+    };
+  }
+  if (status === "logic_confused") {
+    return {
+      matched: false,
+      tone: "danger",
+      message: "该回答涉及此维度，但存在逻辑混乱，建议重组论证链路。",
+    };
+  }
+  if (status === "knowledge_unclear") {
+    return {
+      matched: false,
+      tone: "danger",
+      message: "该回答涉及此维度，但知识点不清或概念混淆，建议先校准原理理解。",
+    };
+  }
+  if (status === "missing" || !matchedAnswer) {
+    return {
+      matched: false,
+      tone: "danger",
+      message: "该维度未明确覆盖，建议补充对应回答。",
+    };
+  }
+  return { matched: true, tone: "success", message: "" };
+};
+
+const buildAnswerComparison = (topic: ReviewTopic) => {
+  const explicitMatches = topic.matchedAnswers;
+  const focusPoints = topic.assessmentFocus.map((focus) => ({ label: focus, keywords: [] }));
+  const matches: Array<{
+    point: RubricPoint;
+    matchedAnswerIndex: number;
+    matchedAnswer: string | null;
+    status: ReviewMatchedAnswer["status"];
+    reason: string | undefined;
+  }> = explicitMatches.length > 0
+    ? focusPoints.map((point, index) => {
+        const explicitMatch =
+          explicitMatches.find((item) => item.point === point.label) ??
+          explicitMatches[index] ??
+          ({ point: point.label, answerHighlightIndex: null, status: "missing", reason: "" } satisfies ReviewMatchedAnswer);
+        return {
+          point,
+          matchedAnswerIndex: explicitMatch.answerHighlightIndex ?? -1,
+          matchedAnswer: explicitMatch.answerHighlightIndex != null ? topic.answerHighlights[explicitMatch.answerHighlightIndex] ?? null : null,
+          status: explicitMatch.status,
+          reason: explicitMatch.reason,
+        };
+      })
+    : (topicRubrics[topic.id] ?? genericRubricFallback(topic)).map((point) => {
+        const normalizedAnswers = topic.answerHighlights.map((answer) => answer.toLowerCase());
+        const matchedAnswerIndex = normalizedAnswers.findIndex((answer) => point.keywords.some((keyword) => answer.includes(keyword.toLowerCase())));
+        return {
+          point,
+          matchedAnswerIndex,
+          matchedAnswer: matchedAnswerIndex >= 0 ? topic.answerHighlights[matchedAnswerIndex] : null,
+          status: matchedAnswerIndex >= 0 ? "covered" : "missing",
+          reason: "",
+        };
+      });
+
+  const matchedIndexes = new Set(matches.filter((item) => item.matchedAnswerIndex >= 0).map((item) => item.matchedAnswerIndex));
+  const offTopicAnswers = topic.answerHighlights.map((answer, index) => ({ answer, index })).filter((item) => !matchedIndexes.has(item.index));
+  return { matches, offTopicAnswers };
+};
+
+const buildTopicProblemSummary = (topic: ReviewTopic) => {
+  const problemLines = topic.matchedAnswers
+    .filter((item) => item.status && item.status !== "covered")
+    .map((item) => (item.reason?.trim() || `${item.point} 回答不完整，需要补充。`).replace(/\s+/g, " "));
+
+  const weaknessLines = topic.weaknesses
+    .map((item) => item.trim().replace(/\s+/g, " "))
+    .filter(Boolean);
+
+  const merged = [...problemLines, ...weaknessLines];
+  return merged.length > 0 ? Array.from(new Set(merged)) : ["当前没有提炼出明确问题，建议结合考察点继续补充细节。"];
+};
+
+const InterviewReviewPage = () => {
+  const runtimeConfig = useRuntimeSettingsStore();
+  const [sessions, setSessions] = useState<ReviewSessionListItem[]>(() => getInterviewReviewSessionsSnapshot());
+  const [selectedSession, setSelectedSession] = useState<ReviewSessionDetail | null>(null);
+  const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
+  const [reportStatuses, setReportStatuses] = useState<Record<string, ReviewReportStatus>>(() =>
+    Object.fromEntries(getInterviewReviewSessionsSnapshot().map((session) => [session.id, session.reportStatus]))
+  );
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [optimizationDraft, setOptimizationDraft] = useState("");
+  const [isOptimizing, setIsOptimizing] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ReviewChatMessage[]>([]);
+  const [optimizationError, setOptimizationError] = useState<string | null>(null);
+  const [problemsExpanded, setProblemsExpanded] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void fetchInterviewReviewSessions().then((data) => {
+      if (!alive) return;
+      setSessions(data);
+      setReportStatuses((current) => ({ ...Object.fromEntries(data.map((session) => [session.id, session.reportStatus])), ...current }));
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const selectedTopic = useMemo(() => {
+    if (!selectedSession) return null;
+    return selectedSession.topics.find((topic) => topic.id === selectedTopicId) ?? selectedSession.topics.find((topic) => topic.id === getDefaultTopicId(selectedSession)) ?? selectedSession.topics[0] ?? null;
+  }, [selectedSession, selectedTopicId]);
+
+  const topicChatMessages = useMemo(
+    () => (selectedSession && selectedTopic ? chatMessages.filter((message) => message.sessionId === selectedSession.id && message.topicId === selectedTopic.id) : []),
+    [chatMessages, selectedSession, selectedTopic]
+  );
+
+  const selectedTopicProblems = useMemo(
+    () => (selectedTopic ? buildTopicProblemSummary(selectedTopic) : []),
+    [selectedTopic]
+  );
+
+  useEffect(() => {
+    setProblemsExpanded(false);
+  }, [selectedTopicId]);
+
+  const interviewRecords = useMemo(() => sessions.map((session) => ({ ...session, status: reportStatuses[session.id] ?? session.reportStatus })), [reportStatuses, sessions]);
+
+  const triggerReportGeneration = async (sessionId: string) => {
+    setIsGeneratingReport(true);
+    console.info("[interview-review] trigger generation", {
+      sessionId,
+      runtimeApiKeyConfigured: Boolean(runtimeConfig.apiKey?.trim()),
+      runtimeBaseUrlConfigured: Boolean(runtimeConfig.baseURL?.trim()),
+      runtimeModelConfigured: Boolean(runtimeConfig.model?.trim()),
+    });
+    const result = await generateInterviewReviewReport(sessionId, runtimeConfig);
+    setReportStatuses((current) => ({ ...current, [result.sessionId]: result.reportStatus }));
+    const detail = await fetchInterviewReviewSessionById(sessionId);
+    if (detail) {
+      console.info("[interview-review] detail loaded after generation", {
+        sessionId,
+        topicCount: detail.topics.length,
+        reportStatus: detail.reportStatus,
+      });
+      setSelectedSession(detail);
+      setSelectedTopicId((current) => current ?? getDefaultTopicId(detail));
+    }
+  };
+
+  const handleOpenRecord = (sessionId: string) => {
+    setOptimizationDraft("");
+    setOptimizationError(null);
+    setChatMessages([]);
+    const detail = getInterviewReviewSessionDetailSnapshot(sessionId);
+    console.info("[interview-review] open record", {
+      sessionId,
+      localDetailFound: Boolean(detail),
+      localReportStatus: detail?.reportStatus ?? null,
+      localTopicCount: detail?.topics.length ?? 0,
+    });
+    setSelectedSession(detail);
+    setSelectedTopicId(getDefaultTopicId(detail));
+
+    if ((reportStatuses[sessionId] ?? detail?.reportStatus) !== "ready") {
+      void triggerReportGeneration(sessionId)
+        .catch((error) => setOptimizationError(error instanceof Error ? error.message : "Failed to generate interview review report."))
+        .finally(() => setIsGeneratingReport(false));
+      return;
+    }
+
+    void fetchInterviewReviewSessionById(sessionId).then((data) => {
+      if (!data || data.id !== sessionId) return;
+      setSelectedSession(data);
+      setSelectedTopicId((current) => current ?? getDefaultTopicId(data));
+    });
+  };
+
+  const handleBackToList = () => {
+    setSelectedSession(null);
+    setSelectedTopicId(null);
+    setOptimizationDraft("");
+    setOptimizationError(null);
+    setIsGeneratingReport(false);
+  };
+
+  const handleGenerateReport = () => {
+    if (!selectedSession) return;
+    setOptimizationDraft("");
+    setOptimizationError(null);
+    setSelectedTopicId(getDefaultTopicId(selectedSession));
+    void triggerReportGeneration(selectedSession.id)
+      .catch((error) => setOptimizationError(error instanceof Error ? error.message : "Failed to generate interview review report."))
+      .finally(() => setIsGeneratingReport(false));
+  };
+
+  const handleOptimizeTopic = async () => {
+    if (!selectedSession || !selectedTopic || !optimizationDraft.trim() || isOptimizing) return;
+    const userMessage = optimizationDraft.trim();
+    setOptimizationDraft("");
+    setChatMessages((current) => [...current, { messageId: `user-${Date.now()}`, sessionId: selectedSession.id, topicId: selectedTopic.id, role: "user", content: userMessage, createdAt: new Date().toISOString() }]);
+    setIsOptimizing(true);
+    setOptimizationError(null);
+    try {
+      const result = await optimizeInterviewReviewTopic({
+        sessionId: selectedSession.id,
+        topicId: selectedTopic.id,
+        message: userMessage,
+        conversation: topicChatMessages,
+        runtimeConfig,
+      });
+      setChatMessages((current) => [...current, result.message]);
+    } catch (error) {
+      setOptimizationDraft(userMessage);
+      setOptimizationError(error instanceof Error ? error.message : "Failed to optimize answer.");
+    } finally {
+      setIsOptimizing(false);
+    }
+  };
+
+  const handleOptimizationDraftKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    void handleOptimizeTopic();
+  };
+
+  if (!selectedSession) {
+    return (
+      <div className="flex min-h-[calc(100vh-140px)] items-center justify-center px-4 py-10 md:px-6">
+        <div className="w-full max-w-3xl">
+          <Card className="min-h-[520px] rounded-[20px] border border-border/70 bg-background shadow-sm">
+            <CardHeader>
+              <CardTitle className="text-center text-xl">选择面试记录</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {interviewRecords.length === 0 ? (
+                <p className="text-center text-sm text-muted-foreground">请先在"模拟面试"页面完成模拟面试，完成后此处即可显示面试记录。</p>
+              ) : null}
+              {interviewRecords.map((record) => {
+                const ready = record.status === "ready";
+                return (
+                  <button key={record.id} type="button" onClick={() => handleOpenRecord(record.id)} className="w-full rounded-[16px] border border-border/70 bg-background px-4 py-3.5 text-left hover:border-primary/25 hover:bg-sidebar/10">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="grid flex-1 gap-2.5 md:grid-cols-[1.2fr_1fr_1.1fr]">
+                        <div className="space-y-1 rounded-2xl bg-sidebar/35 px-3 py-2.5"><p className="text-xs text-muted-foreground">岗位名称</p><p className="text-base font-medium text-foreground">{record.role}</p></div>
+                        <div className="space-y-1 rounded-2xl bg-sidebar/35 px-3 py-2.5"><p className="text-xs text-muted-foreground">面试时间</p><p className="text-base font-semibold text-foreground">{record.interviewAt}</p></div>
+                        <div className="space-y-1 rounded-2xl bg-sidebar/35 px-3 py-2.5"><p className="text-xs text-muted-foreground">记录状态</p><div className="flex items-center gap-2"><Badge className={cn("rounded-full border px-2.5 py-0.5 text-xs font-medium", ready ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300")}>{ready ? "已生成复盘" : "待生成复盘"}</Badge><span className="text-sm text-muted-foreground">{record.topicCount} 个 Topic</span></div></div>
+                      </div>
+                      <span className="inline-flex whitespace-nowrap rounded-2xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">查看复盘<ChevronRight className="ml-1 h-4 w-4" /></span>
+                    </div>
+                  </button>
+                );
+              })}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-6 pb-6">
+      <section className="rounded-3xl border border-border/70 bg-gradient-to-br from-background via-background to-sidebar/50 p-6 shadow-sm">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+          <div><h1 className="text-2xl font-semibold tracking-tight text-foreground md:text-3xl">面试复盘报告</h1></div>
+          <div className="flex items-center gap-3">
+            <div className="rounded-2xl border border-border/70 bg-background/90 px-4 py-3 shadow-sm"><p className="text-xs text-muted-foreground">当前面试记录</p><p className="text-sm font-semibold text-foreground">{selectedSession.role}</p></div>
+          </div>
+        </div>
+      </section>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="space-y-6">
+          <div className="flex items-center gap-3">
+            <Button type="button" variant="ghost" className="h-9 rounded-full border border-border/70 px-4 text-muted-foreground hover:bg-sidebar/35" onClick={handleBackToList}><ArrowLeft className="mr-2 h-4 w-4" />返回记录列表</Button>
+            <Button type="button" variant="outline" className="rounded-2xl" onClick={handleGenerateReport} disabled={isGeneratingReport}>重新生成</Button>
+          </div>
+
+          <Card className="rounded-3xl border border-border/70 shadow-sm">
+            <CardHeader><div className="flex items-center justify-between"><CardTitle>面试总览</CardTitle>{selectedSession.reportStatus === "ready" ? <Badge className="rounded-full bg-primary px-3 py-1 text-sm font-semibold text-primary-foreground">总体评分 {selectedSession.overallScore}</Badge> : <Badge variant="outline">待生成</Badge>}</div></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-4 md:grid-cols-3">{[{ label: "岗位方向", value: selectedSession.role }, { label: "面试时间", value: selectedSession.interviewAt }, { label: "Topic 数量", value: String(selectedSession.topics.length) }].map((item) => <div key={item.label} className="space-y-2 rounded-2xl bg-sidebar/35 px-4 py-4"><p className="text-xs text-muted-foreground">{item.label}</p><p className="text-lg font-semibold text-foreground">{item.value}</p></div>)}</div>
+              <div className="rounded-2xl border border-border/60 bg-background px-4 py-4"><p className="mb-2 text-xs text-muted-foreground">评价</p><p className="text-sm leading-7 text-foreground">{selectedSession.summary}</p></div>
+              {optimizationError ? <div className="rounded-2xl border border-rose-500/20 bg-rose-500/5 px-4 py-4 text-sm leading-6 text-rose-600 dark:text-rose-300">{optimizationError}</div> : null}
+            </CardContent>
+          </Card>
+
+          <AnimatePresence mode="wait">
+            {isGeneratingReport ? (
+              <motion.div key="generating" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}><Card className="rounded-3xl border border-border/70 shadow-sm"><CardContent className="flex min-h-[320px] flex-col items-center justify-center gap-4 p-8 text-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /><div><h2 className="text-xl font-semibold text-foreground">正在生成面试复盘</h2><p className="text-sm text-muted-foreground">正在调用 LLM 分析面试记录并生成结构化复盘，请稍候。</p></div></CardContent></Card></motion.div>
+            ) : selectedSession.topics.length === 0 ? (
+              <motion.div key="empty" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}><Card className="rounded-3xl border border-dashed border-border/70 shadow-sm"><CardContent className="flex min-h-[320px] flex-col items-center justify-center gap-4 p-8 text-center"><Sparkles className="h-8 w-8 text-primary" /><div><h2 className="text-xl font-semibold text-foreground">尚未生成 LLM 复盘评价</h2><p className="text-sm text-muted-foreground">点击“查看复盘”后会自动生成。若失败，可点击“重新生成”。</p></div></CardContent></Card></motion.div>
+            ) : (
+              <motion.div key="topics" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="space-y-5 pt-2">
+                {selectedSession.topics.map((topic) => {
+                  const comparison = buildAnswerComparison(topic);
+                  const isActive = topic.id === (selectedTopic?.id ?? getDefaultTopicId(selectedSession));
+                  return <Card key={topic.id} className={cn("rounded-3xl border border-border/70 shadow-sm", isActive && "border-primary/25")}><CardContent className="space-y-6 p-5 md:p-6"><div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/70 bg-sidebar/25 px-5 py-4"><div className="flex items-center gap-3"><button type="button" onClick={() => setSelectedTopicId(topic.id)} className="text-left text-2xl font-semibold text-foreground">{topic.name}</button></div><Badge variant="outline" className={cn("rounded-full border px-4 py-2 text-base font-semibold", getScoreBadgeTone(topic.score))}>AI 评分 {topic.score}</Badge></div><div className="rounded-3xl border border-border/70 bg-background px-5 py-5"><p className="mb-2 text-sm font-semibold text-foreground">核心问题</p><p className="text-base leading-8 text-foreground">{topic.coreQuestion}</p></div><div className="grid gap-4 xl:grid-cols-2"><div className="rounded-3xl border border-border/70 bg-background px-5 py-5"><p className="mb-3 text-sm font-semibold text-foreground">面试官考察意图</p><div className="space-y-3">{(topic.assessmentFocus ?? []).map((focus, index) => <div key={`${topic.id}-focus-${index}`} className="rounded-2xl bg-sidebar/30 px-4 py-3"><p className="text-sm text-muted-foreground">考察点 {index + 1}</p><p className="mt-1 text-base font-medium text-foreground">{focus}</p></div>)}</div></div><div className="rounded-3xl border border-border/70 bg-background px-5 py-5"><p className="mb-3 text-sm font-semibold text-foreground">我的实际回答</p><div className="space-y-3">{comparison.matches.map((match, index) => { const state = getMatchedAnswerState(match.status, match.matchedAnswer); const warning = state.tone === "warning"; return <div key={match.point.label} className={cn("rounded-2xl border px-4 py-3", state.matched ? "border-emerald-500/20 bg-emerald-500/5" : warning ? "border-amber-500/20 bg-amber-500/5" : "border-rose-500/20 bg-rose-500/5")}><div className="flex items-start gap-3">{state.matched ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" /> : <TriangleAlert className={cn("mt-0.5 h-4 w-4 shrink-0", warning ? "text-amber-500" : "text-rose-500")} />}<div><p className="text-sm text-muted-foreground">采分点 {index + 1}</p>{state.matched ? <p className="text-base leading-7 text-foreground">{match.matchedAnswer}</p> : <div className="space-y-1.5"><p className={cn("text-sm leading-7", warning ? "text-amber-700 dark:text-amber-300" : "text-rose-600 dark:text-rose-300")}>{state.message}</p>{match.matchedAnswer ? <p className={cn("text-sm leading-7", warning ? "text-amber-800 dark:text-amber-200" : "text-rose-700 dark:text-rose-200")}>实际回答：{match.matchedAnswer}</p> : null}{match.reason ? <p className={cn("text-xs leading-6", warning ? "text-amber-700/90 dark:text-amber-300/90" : "text-rose-600/90 dark:text-rose-300/90")}>判定依据：{match.reason}</p> : null}</div>}</div></div></div>; })}</div></div></div></CardContent></Card>;
+                })}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+        <div className="xl:sticky xl:top-6 xl:self-start">
+          <Card className="min-h-[620px] overflow-hidden rounded-3xl border border-border/70 shadow-sm xl:h-[calc(100vh-1.5rem)]">
+            <CardHeader className="border-b border-border/60 bg-background/95 pb-4"><div className="flex items-start justify-between gap-3"><div><CardTitle className="text-xl font-semibold tracking-tight">面试回复打磨</CardTitle><CardDescription className="mt-1 text-sm leading-6">选择话题，发送你的思路和疑问，获取针对性的优化建议。</CardDescription></div></div></CardHeader>
+            <CardContent className="flex min-h-[540px] flex-col p-0 xl:h-[calc(100%-5rem)]">
+              {selectedTopic ? (
+                <>
+                  <div className="flex-1 overflow-y-auto px-4 py-5"><div className="space-y-3"><div className="rounded-3xl border border-border/70 bg-background px-4 py-3"><div className="flex flex-wrap items-start justify-between gap-3"><div className="flex min-w-0 flex-1 flex-wrap items-center gap-2.5"><h3 className="text-lg font-semibold tracking-tight text-foreground">{selectedTopic.name}</h3></div><Badge variant="outline" className={cn("shrink-0 rounded-full border px-3 py-1 text-sm font-semibold", getScoreBadgeTone(selectedTopic.score))}>当前分数 {selectedTopic.score}</Badge></div><div className="mt-3 space-y-3 text-sm leading-7"><div><p className="font-semibold text-foreground">核心问题</p><p className="mt-1 text-foreground">{selectedTopic.coreQuestion}</p></div><div><div className="flex items-center justify-between gap-3"><p className="font-semibold text-foreground">回答存在的问题</p>{selectedTopicProblems.length > 2 ? <button type="button" onClick={() => setProblemsExpanded((current) => !current)} className="text-xs font-medium text-primary hover:underline">{problemsExpanded ? "收起" : "展开全部"}</button> : null}</div><div className="mt-1 space-y-1.5 text-muted-foreground">{(problemsExpanded ? selectedTopicProblems : selectedTopicProblems.slice(0, 2)).map((problem, index) => <p key={`${selectedTopic.id}-problem-${index}`}>{problem}</p>)}</div></div></div></div>{topicChatMessages.map((message) => message.role === "user" ? <div key={message.messageId} className="flex justify-end"><div className="max-w-[85%] rounded-[22px] rounded-br-md bg-primary px-4 py-3 text-sm leading-7 text-primary-foreground shadow-sm">{message.content}</div></div> : <div key={message.messageId} className="rounded-3xl border border-primary/15 bg-primary/5 px-4 py-4"><p className="text-sm font-semibold text-primary">深度打磨回答</p><p className="mt-3 text-sm leading-7 text-foreground">{message.content}</p>{message.evidence?.find((item) => item.type === "optimized_answer" && item.content.trim()) ? <div className="mt-4 rounded-2xl border border-primary/20 bg-background/90 px-4 py-3"><p className="text-xs font-semibold tracking-wide text-primary">建议回答</p><p className="mt-2 text-sm leading-7 text-foreground">{message.evidence.find((item) => item.type === "optimized_answer")?.content}</p></div> : null}</div>)}{isOptimizing ? <div className="rounded-3xl border border-border/60 bg-background px-4 py-4 text-sm text-muted-foreground"><Loader2 className="mr-2 inline h-4 w-4 animate-spin" />正在生成打磨建议...</div> : null}{optimizationError ? <div className="rounded-3xl border border-rose-500/20 bg-rose-500/5 px-4 py-4 text-sm leading-6 text-rose-600 dark:text-rose-300">{optimizationError}</div> : null}</div></div>
+                  <div className="border-t border-border/60 px-4 pb-4 pt-3"><div className="flex items-center gap-2 rounded-[16px] border border-border/60 bg-muted/20 px-2 py-1.5"><Textarea value={optimizationDraft} onChange={(event) => setOptimizationDraft(event.target.value)} onKeyDown={handleOptimizationDraftKeyDown} placeholder="输入你想探讨的话题，或询问这个问题还能从哪些角度拓展。" className="min-h-[48px] flex-1 resize-none rounded-[12px] border-0 bg-transparent px-3 py-2.5 text-sm leading-6 shadow-none hover:bg-transparent focus:bg-transparent focus:ring-0 focus-visible:ring-0" maxLength={1500} /><Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-full text-foreground hover:bg-transparent hover:text-foreground"><Mic className="h-4 w-4" /></Button><Button type="button" size="icon" className="h-8 w-8 shrink-0 rounded-full border-0 bg-primary/60 text-primary-foreground hover:bg-primary/60" onClick={handleOptimizeTopic} disabled={!optimizationDraft.trim() || isOptimizing}><Send className="h-4 w-4" /></Button></div><div className="mt-2 flex items-center justify-between px-1 text-[11px] text-muted-foreground/90"><span>建议控制在 1200 字以内</span><span>{optimizationDraft.length}/1500</span></div></div>
+                </>
+              ) : (
+                <div className="flex min-h-[540px] items-center justify-center p-6 text-sm text-muted-foreground">暂无 Topic 数据。</div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
+export default InterviewReviewPage;

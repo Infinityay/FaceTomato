@@ -495,8 +495,34 @@ function renderPage(initialPath: string = "/interview") {
   );
 }
 
-const RECOVERABLE_SESSIONS_KEY = "face-tamato-mock-interview-recoverable-sessions";
-const LEGACY_RECOVERABLE_SESSIONS_KEY = RECOVERABLE_SESSIONS_KEY;
+const RECOVERABLE_SESSIONS_KEY = "face-tomato-mock-interview-recoverable-sessions";
+const LEGACY_RECOVERABLE_SESSIONS_KEY = "face-tamato-mock-interview-recoverable-sessions";
+const LEGACY_PENDING_SESSIONS_KEY = "face-tamato-mock-interview-pending-sessions";
+const PENDING_SESSIONS_KEY = "face-tomato-mock-interview-pending-sessions";
+
+function makeRecoverableSnapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    sessionId: "session-1",
+    interviewType: "校招",
+    category: "前端开发",
+    status: "ready",
+    limits: defaultLimits,
+    jdText: "已有 JD 内容",
+    jdData: defaultJdData,
+    resumeSnapshot: mockResume,
+    retrieval: defaultRetrieval,
+    interviewPlan: defaultPlan,
+    interviewState: defaultState,
+    messages: [{ id: "assistant-1", role: "assistant", content: "请做一个自我介绍。" }],
+    resumeFingerprint: "fp-test",
+    createdAt: "2026-03-16T10:00:00.000Z",
+    lastActiveAt: "2026-03-16T10:10:00.000Z",
+    expiresAt: "2099-03-16T12:00:00.000Z",
+    developerContext: null,
+    developerTrace: [],
+    ...overrides,
+  };
+}
 
 const getLatestSpeechStatusUrl = () => {
   const speechCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes("/api/speech/status"));
@@ -1185,37 +1211,20 @@ describe("MockInterviewPage", () => {
       JSON.stringify([
         {
           snapshot: {
-            snapshotVersion: 1,
             sessionId: "legacy-session",
             stage: "basic",
           },
         },
         {
-          snapshot: {
-            snapshotVersion: 2,
+          snapshot: makeRecoverableSnapshot({
             sessionId: "session-1",
-            interviewType: "校招",
-            category: "前端开发",
-            status: "ready",
-            limits: defaultLimits,
-            jdText: "已有 JD 内容",
-            jdData: defaultJdData,
-            resumeSnapshot: mockResume,
-            retrieval: defaultRetrieval,
-            interviewPlan: defaultPlan,
             interviewState: {
               ...defaultState,
               currentRound: 2,
               turnCount: 1,
             },
             messages: [{ id: "assistant-1", role: "assistant", content: "请介绍一下项目。" }],
-            resumeFingerprint: "fp-test",
-            createdAt: "2026-03-16T10:00:00.000Z",
-            lastActiveAt: "2026-03-16T10:10:00.000Z",
-            expiresAt: "2099-03-16T12:00:00.000Z",
-            developerContext: null,
-            developerTrace: [],
-          },
+          }),
         },
       ])
     );
@@ -1227,28 +1236,110 @@ describe("MockInterviewPage", () => {
     const stored = JSON.parse(localStorage.getItem(RECOVERABLE_SESSIONS_KEY) ?? "[]");
     expect(stored).toHaveLength(1);
     expect(stored[0].snapshot.sessionId).toBe("session-1");
-    expect(stored[0].snapshot.snapshotVersion).toBe(3);
     expect(stored[0].snapshot.developerTrace).toEqual([]);
   });
 
-  it("migrates recoverable sessions from legacy storage key", async () => {
+  it("restores null jdData without leaking metadata from a previous session", async () => {
+    useResumeStore.setState({ parsedResume: mockResume, parseStatus: "success" });
+    useOptimizationStore.setState({
+      status: "analysis",
+      jdText: "旧 JD",
+      jdData: defaultJdData,
+      overview: null,
+      suggestions: null,
+      suggestionsStatus: "idle",
+      suggestionsError: null,
+      activeSuggestionId: null,
+      activeTab: "overview",
+      error: null,
+      matchReport: null,
+    });
+    localStorage.setItem(
+      RECOVERABLE_SESSIONS_KEY,
+      JSON.stringify([
+        {
+          snapshot: makeRecoverableSnapshot({
+            sessionId: "session-null-jd",
+            jdText: "没有结构化 JD",
+            jdData: null,
+            resumeFingerprint: "fp-null-jd",
+            lastActiveAt: "2026-03-16T10:15:00.000Z",
+          }),
+        },
+      ])
+    );
+
+    renderPage("/interview?session=session-null-jd");
+
+    expect(await screen.findByText("第 1 / 4 轮")).toBeInTheDocument();
+    expect(useOptimizationStore.getState().jdData).toBeNull();
+    const stored = JSON.parse(localStorage.getItem(RECOVERABLE_SESSIONS_KEY) ?? "[]");
+    expect(stored[0].snapshot.jdData).toBeNull();
+  });
+
+  it("recovers interrupted streaming snapshots by rolling back to the last stable turn", async () => {
+    useResumeStore.setState({ parsedResume: mockResume, parseStatus: "success" });
+    localStorage.setItem(
+      RECOVERABLE_SESSIONS_KEY,
+      JSON.stringify([
+        {
+          snapshot: makeRecoverableSnapshot({
+            sessionId: "session-streaming",
+            status: "streaming",
+            jdText: "流式恢复 JD",
+            interviewState: {
+              ...defaultState,
+              currentRound: 2,
+              turnCount: 1,
+              reflectionHistory: [
+                {
+                  depth_score: 4,
+                  authenticity_score: 4,
+                  completeness_score: 4,
+                  logic_score: 4,
+                  overall_assessment: "回答较完整，可以继续。",
+                  should_continue: true,
+                  suggested_follow_up: "请补充更多技术细节。",
+                  reason: "还有可追问空间。",
+                },
+              ],
+            },
+            messages: [
+              { id: "assistant-1", role: "assistant", content: "请介绍一下最近的项目。" },
+              { id: "user-1", role: "user", content: "我最近做了一个 React 项目。" },
+            ],
+            resumeFingerprint: "fp-streaming",
+            lastActiveAt: "2026-03-16T10:15:00.000Z",
+          }),
+        },
+      ])
+    );
+
+    renderPage("/interview?session=session-streaming");
+
+    expect(await screen.findByText("第 2 / 4 轮")).toBeInTheDocument();
+    expect(screen.getByText("待回答")).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).not.toBeDisabled();
+    expect(screen.queryByText("我最近做了一个 React 项目。")).not.toBeInTheDocument();
+    expect(useMockInterviewStore.getState().interviewState?.turnCount).toBe(0);
+    expect(useMockInterviewStore.getState().interviewState?.reflectionHistory).toEqual([]);
+    const stored = JSON.parse(localStorage.getItem(RECOVERABLE_SESSIONS_KEY) ?? "[]");
+    expect(stored[0].snapshot.status).toBe("ready");
+    expect(stored[0].snapshot.messages).toEqual([
+      { id: "assistant-1", role: "assistant", content: "请介绍一下最近的项目。" },
+    ]);
+    expect(stored[0].snapshot.interviewState.turnCount).toBe(0);
+  });
+
+  it("ignores recoverable sessions stored only under the legacy storage key", async () => {
     useResumeStore.setState({ parsedResume: mockResume, parseStatus: "success" });
     localStorage.setItem(
       LEGACY_RECOVERABLE_SESSIONS_KEY,
       JSON.stringify([
         {
-          snapshot: {
-            snapshotVersion: 2,
+          snapshot: makeRecoverableSnapshot({
             sessionId: "session-legacy-key",
-            interviewType: "校招",
-            category: "前端开发",
-            status: "ready",
-            limits: defaultLimits,
             jdText: "历史 JD 内容",
-            jdData: defaultJdData,
-            resumeSnapshot: mockResume,
-            retrieval: defaultRetrieval,
-            interviewPlan: defaultPlan,
             interviewState: {
               ...defaultState,
               currentRound: 3,
@@ -1256,24 +1347,112 @@ describe("MockInterviewPage", () => {
             },
             messages: [{ id: "assistant-1", role: "assistant", content: "继续说说性能优化。" }],
             resumeFingerprint: "fp-legacy",
-            createdAt: "2026-03-16T10:00:00.000Z",
             lastActiveAt: "2026-03-16T10:15:00.000Z",
-            expiresAt: "2099-03-16T12:00:00.000Z",
-            developerContext: null,
-            developerTrace: [],
-          },
+          }),
         },
       ])
     );
 
     renderPage("/interview?session=session-legacy-key");
 
-    expect(await screen.findByText("第 3 / 4 轮")).toBeInTheDocument();
-    const migrated = JSON.parse(localStorage.getItem(RECOVERABLE_SESSIONS_KEY) ?? "[]");
-    expect(migrated).toHaveLength(1);
-    expect(migrated[0].snapshot.sessionId).toBe("session-legacy-key");
-    expect(migrated[0].snapshot.snapshotVersion).toBe(3);
-    expect(JSON.parse(localStorage.getItem(LEGACY_RECOVERABLE_SESSIONS_KEY) ?? "[]")).toHaveLength(1);
+    expect(await screen.findByText("历史会话不存在或已过期")).toBeInTheDocument();
+    expect(localStorage.getItem(RECOVERABLE_SESSIONS_KEY)).toBeNull();
+    expect(localStorage.getItem(LEGACY_RECOVERABLE_SESSIONS_KEY)).toBeTruthy();
+  });
+
+  it("rolls back interrupted assistant output to the last completed turn", async () => {
+    useResumeStore.setState({ parsedResume: mockResume, parseStatus: "success" });
+    localStorage.setItem(
+      RECOVERABLE_SESSIONS_KEY,
+      JSON.stringify([
+        {
+          snapshot: makeRecoverableSnapshot({
+            sessionId: "session-assistant-partial",
+            status: "streaming",
+            jdText: "流式恢复 JD",
+            interviewState: {
+              ...defaultState,
+              assistantQuestionCount: 1,
+              turnCount: 1,
+              reflectionHistory: [
+                {
+                  depth_score: 4,
+                  authenticity_score: 4,
+                  completeness_score: 4,
+                  logic_score: 4,
+                  overall_assessment: "回答较完整，可以继续。",
+                  should_continue: true,
+                  suggested_follow_up: "请补充更多技术细节。",
+                  reason: "还有可追问空间。",
+                },
+              ],
+            },
+            messages: [
+              { id: "assistant-1", role: "assistant", content: "请介绍一下最近的项目。" },
+              { id: "user-1", role: "user", content: "我最近做了一个 React 项目。" },
+              { id: "assistant-2", role: "assistant", content: "继续说说" },
+            ],
+            resumeFingerprint: "fp-assistant-partial",
+            lastActiveAt: "2026-03-16T10:15:00.000Z",
+          }),
+        },
+      ])
+    );
+
+    renderPage("/interview?session=session-assistant-partial");
+
+    expect(await screen.findByText("第 1 / 4 轮")).toBeInTheDocument();
+    expect(screen.getByText("待回答")).toBeInTheDocument();
+    expect(screen.queryByText("我最近做了一个 React 项目。")).not.toBeInTheDocument();
+    expect(screen.queryByText("继续说说")).not.toBeInTheDocument();
+    expect(useMockInterviewStore.getState().interviewState?.turnCount).toBe(0);
+    expect(useMockInterviewStore.getState().interviewState?.reflectionHistory).toEqual([]);
+    const stored = JSON.parse(localStorage.getItem(RECOVERABLE_SESSIONS_KEY) ?? "[]");
+    expect(stored[0].snapshot.messages).toEqual([
+      { id: "assistant-1", role: "assistant", content: "请介绍一下最近的项目。" },
+    ]);
+    expect(stored[0].snapshot.interviewState.turnCount).toBe(0);
+  });
+
+  it("ignores pending sessions stored only under the legacy pending key", async () => {
+    useResumeStore.setState({ parsedResume: mockResume, parseStatus: "success" });
+    localStorage.setItem(
+      LEGACY_PENDING_SESSIONS_KEY,
+      JSON.stringify([
+        {
+          pending: {
+            pendingId: "pending-legacy",
+            sessionId: "session-pending",
+            interviewType: "校招",
+            category: "前端开发",
+            creatingStep: "generating_plan",
+            startedAt: "2026-03-16T10:00:00.000Z",
+            lastActiveAt: "2026-03-16T10:15:00.000Z",
+          },
+        },
+      ])
+    );
+    localStorage.setItem(
+      RECOVERABLE_SESSIONS_KEY,
+      JSON.stringify([
+        {
+          snapshot: makeRecoverableSnapshot({
+            sessionId: "session-pending",
+            jdText: "已恢复 JD",
+            messages: [],
+            resumeFingerprint: "fp-pending",
+            lastActiveAt: "2026-03-16T10:15:00.000Z",
+          }),
+        },
+      ])
+    );
+
+    renderPage("/interview?pending=pending-legacy");
+
+    expect(await screen.findByRole("button", { name: "开始模拟面试" })).toBeInTheDocument();
+    expect(screen.queryByText("第 1 / 4 轮")).not.toBeInTheDocument();
+    expect(localStorage.getItem(LEGACY_PENDING_SESSIONS_KEY)).toBeTruthy();
+    expect(JSON.parse(localStorage.getItem(PENDING_SESSIONS_KEY) ?? "[]")).toEqual([]);
   });
 
   it("clears draft when restarting", async () => {

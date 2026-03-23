@@ -24,11 +24,27 @@ uv sync
 cp .env.example .env
 ```
 
+默认安装不会包含本地 RAG 大依赖。
+如果你要启用 mock interview RAG、构建 / 重建索引，或运行 RAG-only 测试，请先额外执行（当前依赖组合面向非 Windows 平台）：
+
+```bash
+cd backend
+uv sync --extra rag
+```
+
 先根据 [`configuration.md`](./configuration.md) 填写 `backend/.env`，再启动：
 
 ```bash
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 6522
 ```
+
+Docker 路径同样区分安装层与运行时层：
+
+- 默认 non-RAG 镜像：`docker compose up --build -d`
+- 构建带 RAG 依赖的镜像：`BACKEND_INSTALL_RAG=true docker compose up --build -d`
+- 运行时真正尝试启用 mock interview RAG：在 `backend/.env` 中再设置 `MOCK_INTERVIEW_RAG=true`
+
+> `backend/.env` 只影响容器启动后的运行时行为，不会反向控制镜像构建；即使 `MOCK_INTERVIEW_RAG=true`，若镜像未以 `BACKEND_INSTALL_RAG=true` 构建，或索引 / 依赖不可用，服务仍会自动回退到 non-RAG。
 
 接口文档：`http://127.0.0.1:6522/docs`
 
