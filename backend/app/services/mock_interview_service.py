@@ -50,6 +50,24 @@ from app.schemas.resume import ResumeData
 from app.services.interview_service import get_data_service
 from app.utils.structured_output import extract_structured_output_json, invoke_with_fallback
 
+
+@lru_cache(maxsize=8)
+def _mock_interview_rag_dependencies_available(settings_fingerprint: str = "default") -> bool:
+    del settings_fingerprint
+    if not _is_zvec_importable():
+        return False
+
+    try:
+        from app.services.interview_embedding_service import ensure_rag_dependencies_available
+    except Exception:
+        return False
+
+    try:
+        ensure_rag_dependencies_available(get_settings())
+    except Exception:
+        return False
+    return True
+
 JD_CHAR_LIMIT = 5000
 MAX_QUESTIONS_PER_TOPIC = 5
 OPENING_ROUND_MAX_QUESTIONS = 1
@@ -154,10 +172,12 @@ class MockInterviewService:
         self._rag_service = rag_service
         self._session_ttl_minutes = max(settings.mock_interview_session_ttl_minutes, 10)
         self._plan_generation_timeout_seconds = max(settings.mock_interview_plan_timeout_seconds, 5)
-        zvec_available = _is_zvec_importable()
-        self._disable_rag = (not settings.mock_interview_rag) or not zvec_available
-        if settings.mock_interview_rag and not zvec_available:
-            print("   ⚠️ zvec import failed, fallback to mock interview mode without RAG")
+        rag_dependencies_available = _mock_interview_rag_dependencies_available(
+            settings.model_dump_json(exclude_none=True)
+        )
+        self._disable_rag = (not settings.mock_interview_rag) or not rag_dependencies_available
+        if settings.mock_interview_rag and not rag_dependencies_available:
+            print("   ⚠️ RAG dependencies unavailable, fallback to mock interview mode without RAG")
         self._limits = MockInterviewSessionLimits(sessionTtlMinutes=self._session_ttl_minutes)
 
     def _create_chat_model(

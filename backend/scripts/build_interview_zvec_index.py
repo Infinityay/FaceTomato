@@ -11,6 +11,7 @@ from app.services.interview_embedding_service import (
     build_dense_query_embedding_from_settings,
     build_interview_corpus,
     build_sparse_document_embedding_from_settings,
+    ensure_rag_dependencies_available,
 )
 from app.services.interview_rag_service import InterviewZvecIndexService
 from app.services.interview_service import get_data_service
@@ -91,8 +92,9 @@ def _build_settings_with_overrides(args: argparse.Namespace) -> Settings:
 
 def main() -> None:
     args = parse_args()
-    data_service = get_data_service()
     settings = _build_settings_with_overrides(args)
+    ensure_rag_dependencies_available(settings)
+    data_service = get_data_service()
     corpus = build_interview_corpus(data_service)
 
     dense_embedding = build_dense_document_embedding_from_settings(settings)
@@ -102,6 +104,7 @@ def main() -> None:
         dense_embedding_fn=dense_embedding,
         sparse_document_embedding_fn=sparse_document_embedding,
         data_service=data_service,
+        settings=settings,
     )
     stats = index_service.create_or_rebuild_index()
     print(json.dumps(stats, ensure_ascii=False, indent=2))

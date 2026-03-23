@@ -11,10 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol
 
-import zvec
-from zvec import Doc
-
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.schemas.interview import Category, InterviewData, InterviewType
 from app.schemas.jd import JDData
 from app.schemas.mock_interview import (
@@ -30,6 +27,7 @@ from app.services.interview_embedding_service import (
     build_interview_embedding_metadata,
     build_sparse_document_embedding_from_settings,
     build_sparse_query_embedding_from_settings,
+    ensure_rag_dependencies_available,
     resolve_dense_embedding_dimension,
 )
 from app.services.interview_service import DataService, get_data_service
@@ -100,6 +98,12 @@ class IndexedInterviewDocument:
     sparse_embedding: dict[int, float]
 
 
+def _import_zvec():
+    from app.services.interview_embedding_service import _import_zvec as import_zvec
+
+    return import_zvec()
+
+
 class InterviewZvecIndexService:
     """Manage the lifecycle of the local ZVEC interview collection."""
 
@@ -116,12 +120,13 @@ class InterviewZvecIndexService:
         sparse_document_embedding_fn: SparseEmbeddingFunction,
         data_service: DataService | None = None,
         index_path: str | Path | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self.dense_embedding_fn = dense_embedding_fn
         self.sparse_document_embedding_fn = sparse_document_embedding_fn
         self.data_service = data_service or get_data_service()
-        settings = get_settings()
-        configured_path = Path(index_path or settings.interview_zvec_index_path)
+        self._settings = settings or get_settings()
+        configured_path = Path(index_path or self._settings.interview_zvec_index_path)
         self.index_path = self._resolve_index_path(configured_path)
 
     @staticmethod
@@ -132,7 +137,8 @@ class InterviewZvecIndexService:
         return base_dir / index_path
 
     @classmethod
-    def build_collection_schema(cls, dense_dimension: int) -> zvec.CollectionSchema:
+    def build_collection_schema(cls, dense_dimension: int):
+        zvec = _import_zvec()
         scalar_index = zvec.InvertIndexParam()
         range_index = zvec.InvertIndexParam(enable_range_optimization=True)
         return zvec.CollectionSchema(
@@ -186,7 +192,10 @@ class InterviewZvecIndexService:
 
     def _current_embedding_metadata(self) -> dict[str, Any]:
         dense_dimension = resolve_dense_embedding_dimension(self.dense_embedding_fn)
-        return build_interview_embedding_metadata(dense_document_dimension=dense_dimension)
+        return build_interview_embedding_metadata(
+            self._settings,
+            dense_document_dimension=dense_dimension,
+        )
 
     @staticmethod
     def _index_affecting_embedding_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -204,10 +213,12 @@ class InterviewZvecIndexService:
         self._metadata_path().write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def open_collection(self, *, read_only: bool = True):
+        zvec = _import_zvec()
         option = zvec.CollectionOption(read_only=read_only)
         return zvec.open(str(self.index_path), option=option)
 
     def create_or_rebuild_index(self) -> dict[str, int]:
+        zvec = _import_zvec()
         records = self.data_service.list_all_interviews()
         normalized = [self._normalize_interview(record) for record in records]
         schema = self.build_collection_schema(resolve_dense_embedding_dimension(self.dense_embedding_fn))
@@ -293,7 +304,8 @@ class InterviewZvecIndexService:
         ]
         return "\n".join(part for part in parts if part).strip()
 
-    def _to_doc(self, document: IndexedInterviewDocument) -> Doc:
+    def _to_doc(self, document: IndexedInterviewDocument):
+        zvec = _import_zvec()
         return zvec.Doc(
             id=document.document_id,
             vectors={
@@ -362,7 +374,7 @@ class InterviewRagService:
         self.index_service.ensure_index()
         payload = self.build_query_payload(context)
         collection = self.index_service.open_collection(read_only=True)
-        merged_results: list[Doc] = []
+        merged_results: list[Any] = []
         seen_keys: set[str] = set()
         applied_filters = payload.filter_chain[0]
         for filters in payload.filter_chain:
@@ -414,7 +426,8 @@ class InterviewRagService:
         collection,
         filters: MockInterviewRetrievalFilters,
         payload: RetrievalQueryPayload,
-    ) -> list[Doc]:
+    ) -> list[Any]:
+        zvec = _import_zvec()
         return collection.query(
             vectors=[
                 zvec.VectorQuery(
@@ -512,7 +525,7 @@ class InterviewRagService:
             return None
         return " AND ".join(clauses)
 
-    def _to_retrieval_item(self, doc: Doc) -> MockInterviewRetrievalItem:
+    def _to_retrieval_item(self, doc: Any) -> MockInterviewRetrievalItem | None:
         fields = doc.fields or {}
         interview_id = int(fields.get("interview_id", 0))
         if interview_id <= 0:
@@ -536,7 +549,7 @@ class InterviewRagService:
         )
 
     @staticmethod
-    def _result_identity(doc: Doc) -> str:
+    def _result_identity(doc: Any) -> str:
         fields = doc.fields or {}
         source = (fields.get("source") or "").strip()
         source_id = (fields.get("source_id") or "").strip()
@@ -587,6 +600,7 @@ def _build_default_sparse_query_embedding() -> SparseEmbeddingFunction:
 
 @lru_cache(maxsize=1)
 def get_interview_rag_service() -> InterviewRagService:
+    ensure_rag_dependencies_available()
     dense_document_embedding = _build_default_dense_document_embedding()
     dense_query_embedding = _build_default_dense_query_embedding()
     sparse_document_embedding = _build_default_sparse_document_embedding()
@@ -596,6 +610,7 @@ def get_interview_rag_service() -> InterviewRagService:
         dense_embedding_fn=dense_document_embedding,
         sparse_document_embedding_fn=sparse_document_embedding,
         data_service=data_service,
+        settings=get_settings(),
     )
     return InterviewRagService(
         dense_embedding_fn=dense_query_embedding,

@@ -1,5 +1,5 @@
 [project]
-name = "face-tamato-backend"
+name = "face-tomato-backend"
 version = "0.1.0"
 description = "FaceTomato Backend - Resume Parser API"
 requires-python = ">=3.12,<3.13"
@@ -16,11 +16,15 @@ dependencies = [
     "langchain-mcp-adapters>=0.1.0",
     "python-dotenv>=1.0.0",
     "dashscope>=1.20.0",
-    "modelscope>=1.23.0",
     "openai>=1.68.0",
-    "sentence-transformers>=3.0.0",
     "python-magic>=0.4.27",
     "zai-sdk>=0.2.2",
+]
+
+[project.optional-dependencies]
+rag = [
+    "modelscope>=1.23.0",
+    "sentence-transformers>=3.0.0",
     "zvec==0.2.0; sys_platform != 'win32'",
 ]
 

@@ -1,15 +1,55 @@
 from __future__ import annotations
 
+import importlib
 import math
 from pathlib import Path
 from typing import Any
-
-import zvec
 
 from app.core.config import Settings, get_settings
 from app.services.interview_service import DataService, get_data_service
 
 QWEN3_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+RAG_OPTIONAL_DEPENDENCY_MESSAGE = (
+    "RAG functionality requires the backend rag optional dependency. "
+    "Install it with `uv sync --extra rag`."
+)
+
+
+def _missing_rag_dependency_error(package_name: str) -> RuntimeError:
+    return RuntimeError(f"{package_name} is required. {RAG_OPTIONAL_DEPENDENCY_MESSAGE}")
+
+
+def _import_zvec():
+    try:
+        return importlib.import_module("zvec")
+    except ImportError as exc:
+        raise _missing_rag_dependency_error("zvec") from exc
+
+
+def ensure_rag_dependencies_available(settings: Settings | None = None) -> None:
+    current_settings = settings or get_settings()
+    _import_zvec()
+
+    if current_settings.interview_dense_embedding_provider == "local_hf_qwen3":
+        try:
+            importlib.import_module("sentence_transformers")
+        except ImportError as exc:
+            raise _missing_rag_dependency_error("sentence-transformers") from exc
+
+    if current_settings.interview_dense_embedding_model_source == "modelscope":
+        try:
+            importlib.import_module("modelscope")
+        except ImportError as exc:
+            raise _missing_rag_dependency_error("modelscope") from exc
+
+    if (
+        current_settings.interview_sparse_embedding_provider == "local_default"
+        and current_settings.interview_sparse_embedding_model_source == "modelscope"
+    ):
+        try:
+            importlib.import_module("modelscope")
+        except ImportError as exc:
+            raise _missing_rag_dependency_error("modelscope") from exc
 
 
 class LocalQwenDenseEmbedding:
@@ -61,7 +101,10 @@ class LocalQwenDenseEmbedding:
         return len(probe)
 
     def _load_model(self):
-        from sentence_transformers import SentenceTransformer
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise _missing_rag_dependency_error("sentence-transformers") from exc
 
         model_path = self._resolve_model_path()
         kwargs: dict[str, Any] = {"trust_remote_code": True}
@@ -90,9 +133,7 @@ class LocalQwenDenseEmbedding:
             try:
                 from modelscope import snapshot_download
             except ImportError as exc:
-                raise RuntimeError(
-                    "modelscope is required when INTERVIEW_DENSE_EMBEDDING_MODEL_SOURCE=modelscope"
-                ) from exc
+                raise _missing_rag_dependency_error("modelscope") from exc
             return snapshot_download(self.model_name)
         raise ValueError(f"Unsupported dense model source: {self.model_source}")
 
@@ -105,8 +146,10 @@ class LocalQwenDenseEmbedding:
 
 
 def _build_dense_embedding_from_settings(settings: Settings, *, encoding_type: str):
+    del encoding_type
     provider = settings.interview_dense_embedding_provider
     if provider == "local_default":
+        zvec = _import_zvec()
         return zvec.DefaultLocalDenseEmbedding(
             model_source=settings.interview_dense_embedding_model_source
         )
@@ -138,6 +181,7 @@ def _build_sparse_embedding_from_settings(
 ):
     provider = settings.interview_sparse_embedding_provider
     if provider == "bm25":
+        zvec = _import_zvec()
         kwargs = {
             "corpus": corpus,
             "encoding_type": encoding_type,
@@ -149,6 +193,7 @@ def _build_sparse_embedding_from_settings(
             kwargs["k1"] = settings.interview_sparse_embedding_bm25_k1
         return zvec.BM25EmbeddingFunction(**kwargs)
     if provider == "local_default":
+        zvec = _import_zvec()
         return zvec.DefaultLocalSparseEmbedding(
             model_source=settings.interview_sparse_embedding_model_source,
             encoding_type=encoding_type,
@@ -182,6 +227,7 @@ def resolve_dense_embedding_dimension(embedding: Any, configured_dimension: int 
 
 
 def _build_dense_metadata(settings: Settings, *, encoding_type: str, dimension: int) -> dict[str, Any]:
+    del encoding_type
     provider = settings.interview_dense_embedding_provider
     if provider == "local_default":
         return {

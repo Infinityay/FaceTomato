@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import importlib
+
+import pytest
+
 from app.core.config import Settings
-from app.services import interview_embedding_service as embedding_service
+import app.services.interview_embedding_service as embedding_service
 
 
 class FakeDefaultLocalDenseEmbedding:
@@ -42,12 +46,63 @@ class FakeLocalQwenDenseEmbedding:
         self.dimension = 1024
 
 
+class FakeZvecModule:
+    DefaultLocalDenseEmbedding = FakeDefaultLocalDenseEmbedding
+    DefaultLocalSparseEmbedding = FakeDefaultLocalSparseEmbedding
+    BM25EmbeddingFunction = FakeBM25EmbeddingFunction
+
+
 class DenseWithoutDimension:
     pass
 
 
+def test_module_import_is_safe_without_zvec(monkeypatch):
+    original_import_module = embedding_service.importlib.import_module
+
+    def fake_import_module(name: str, package: str | None = None):
+        if name == "zvec":
+            raise ImportError("No module named 'zvec'")
+        return original_import_module(name, package)
+
+    monkeypatch.setattr(embedding_service.importlib, "import_module", fake_import_module)
+
+    reloaded_module = importlib.reload(embedding_service)
+
+    metadata = reloaded_module.build_interview_embedding_metadata(
+        Settings(
+            interview_dense_embedding_provider="local_default",
+            interview_dense_embedding_model_source="huggingface",
+            interview_sparse_embedding_provider="bm25",
+            interview_sparse_embedding_language="zh",
+        ),
+        dense_document_dimension=384,
+        dense_query_dimension=384,
+    )
+
+    assert metadata["index_embedding"]["dense"]["provider"] == "local_default"
+    assert metadata["query_embedding"]["sparse"]["provider"] == "bm25"
+
+
+def test_build_dense_document_embedding_requires_rag_extra_when_zvec_missing(monkeypatch):
+    original_import_module = embedding_service.importlib.import_module
+
+    def fake_import_module(name: str, package: str | None = None):
+        if name == "zvec":
+            raise ImportError("No module named 'zvec'")
+        return original_import_module(name, package)
+
+    monkeypatch.setattr(embedding_service.importlib, "import_module", fake_import_module)
+    settings = Settings(
+        interview_dense_embedding_provider="local_default",
+        interview_dense_embedding_model_source="huggingface",
+    )
+
+    with pytest.raises(RuntimeError, match="rag optional dependency"):
+        embedding_service.build_dense_document_embedding_from_settings(settings)
+
+
 def test_build_dense_document_embedding_uses_local_default_provider(monkeypatch):
-    monkeypatch.setattr(embedding_service.zvec, "DefaultLocalDenseEmbedding", FakeDefaultLocalDenseEmbedding)
+    monkeypatch.setattr(embedding_service, "_import_zvec", lambda: FakeZvecModule)
     settings = Settings(
         interview_dense_embedding_provider="local_default",
         interview_dense_embedding_model_source="modelscope",
@@ -79,8 +134,7 @@ def test_build_dense_document_embedding_uses_local_hf_qwen3_provider(monkeypatch
 
 
 def test_build_sparse_embeddings_support_bm25_and_local_default(monkeypatch):
-    monkeypatch.setattr(embedding_service.zvec, "BM25EmbeddingFunction", FakeBM25EmbeddingFunction)
-    monkeypatch.setattr(embedding_service.zvec, "DefaultLocalSparseEmbedding", FakeDefaultLocalSparseEmbedding)
+    monkeypatch.setattr(embedding_service, "_import_zvec", lambda: FakeZvecModule)
     corpus = ["doc1", "doc2"]
 
     bm25_settings = Settings(
