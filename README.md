@@ -197,6 +197,96 @@ npm run dev
 
 `http://127.0.0.1:5569`
 
+## 📚 面经数据准备（必读）
+
+仓库默认**不会**提交面经题库数据，`backend/data/` 也被 `.gitignore` 忽略。
+
+如果你希望在 FaceTomato 中看到真实的面经题库内容，**必须自行提供** `backend/data/interviews.db`；否则依赖数据库的题库浏览、搜索、详情与邻近导航等能力将无法正常使用。
+
+### 1. `backend/data/` 目录里有什么
+
+- `backend/data/interviews.db`：SQLite 题库数据库，题库浏览与检索的基础数据源
+- `backend/data/interview_zvec/`：可选的本地检索索引目录，用于 RAG / 向量检索能力
+
+其中，**`backend/data/interviews.db` 是查看面经题库的前置条件**。
+
+### 2. 原始数据应该如何准备
+
+如果你还没有 `interviews.db`，可以先准备原始 JSON 数据，再通过迁移脚本生成数据库。
+
+迁移脚本当前会识别以下 **7 个领域目录名**；你可以只提供其中实际拥有数据的目录：
+
+```text
+<your-interview-json-root>/
+├── 前端开发/
+├── 后端开发/
+├── 大模型应用开发/
+├── 大模型算法/
+├── 搜广推算法/
+├── 游戏开发/
+└── 风控算法/
+```
+
+例如，你本地的原始数据目录可以是：
+
+```text
+/data/luyuhang/projects/interview_experiences
+```
+
+每个 JSON 文件表示一条面经记录，建议采用如下格式：
+
+```json
+{
+  "source_id": "722526137238237184",
+  "title": "数字天空UE客户端实习笔试一二面",
+  "content": "拿到的唯一还算可以的offer\n\n笔试：\n1、求单位向量a,b,y的交叉混合积\n2、盒子里12个球，5红7蓝，不放回取两次，两次颜色相同的概率是？......等等",
+  "publish_time": "2025-02-21 11:00:55",
+  "category": "游戏开发",
+  "source": "nowcoder",
+  "company": "数字天空",
+  "department": "UE客户端实习",
+  "stage": "笔试+一面+二面",
+  "result": "offer",
+  "interview_type": "实习"
+}
+```
+
+建议至少保证以下字段语义明确：
+
+- `source_id`：源站内唯一 ID，同一 `source` 下不能重复
+- `title`：面经标题
+- `content`：面经正文
+- `publish_time`：发布时间字符串，建议使用 `YYYY-MM-DD HH:MM:SS` 这类可排序格式
+- `category`：必须是上述 7 个领域之一
+- `source`：数据来源，例如 `x`
+
+其他字段如 `company`、`department`、`stage`、`result`、`interview_type` 建议一并提供，便于题库筛选与展示。
+
+### 3. 如何生成 `interviews.db`
+
+在准备好原始 JSON 数据后，使用仓库内脚本生成 SQLite 数据库：
+
+```bash
+cd backend
+uv run python scripts/migrate_db.py --source-dir /data/luyuhang/projects/interview_experiences
+```
+
+这个脚本会：
+
+1. 重建 `interviews` 表
+2. 从 7 个领域目录中导入 JSON 数据
+3. 默认输出到 `backend/data/interviews.db`
+
+如果你已经有现成的 SQLite 数据库，也可以直接将它放到：
+
+```text
+backend/data/interviews.db
+```
+
+### 4. 可选：继续构建本地检索索引
+
+当 `backend/data/interviews.db` 准备完成后，如需启用本地 RAG 检索，再继续构建 `backend/data/interview_zvec/`。
+
 ## 🐳 Docker 启动
 
 首次使用前，请先准备后端环境变量：
