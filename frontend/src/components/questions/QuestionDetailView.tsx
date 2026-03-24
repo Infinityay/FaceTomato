@@ -77,7 +77,7 @@ export function QuestionDetailView() {
         transition={{ type: "spring", stiffness: 400, damping: 30 }}
         className={
           isMobile
-            ? "relative h-full w-full bg-background"
+            ? "relative flex flex-col h-full w-full bg-background"
             : "relative flex h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border bg-background shadow-lg"
         }
       >
