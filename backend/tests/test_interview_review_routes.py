@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -13,7 +14,10 @@ from app.schemas.interview_review import (
     ReviewSessionListItem,
     ReviewUploadSessionResponse,
 )
-from app.services.interview_review_service import get_interview_review_service
+from app.services.interview_review_service import (
+    InterviewReviewNotEligibleError,
+    get_interview_review_service,
+)
 
 
 class StubInterviewReviewService:
@@ -57,12 +61,16 @@ class StubInterviewReviewService:
     def generate_review(
         self, session_id: str, snapshot: MockInterviewSessionSnapshot | None = None
     ):
+        if session_id == "session-conflict":
+            raise InterviewReviewNotEligibleError()
         if session_id != "session-1":
             return None
         self.last_generate_snapshot = snapshot
         return ReviewGenerateReportResponse(sessionId=session_id, reportStatus="ready")
 
     def upload_snapshot(self, snapshot: MockInterviewSessionSnapshot):
+        if snapshot.sessionId == "session-conflict":
+            raise InterviewReviewNotEligibleError()
         self.last_uploaded_snapshot = snapshot
         return ReviewUploadSessionResponse(
             sessionId=snapshot.sessionId,
@@ -75,6 +83,8 @@ class StubInterviewReviewService:
         )
 
     def export_review(self, session_id: str):
+        if session_id == "session-conflict":
+            raise InterviewReviewNotEligibleError()
         if session_id != "session-1":
             return None
         return ReviewExportReportResponse(
@@ -85,6 +95,8 @@ class StubInterviewReviewService:
         )
 
     def optimize_topic(self, request):
+        if request.sessionId == "session-conflict":
+            raise InterviewReviewNotEligibleError()
         if request.sessionId != "session-1" or request.topicId != "topic-1":
             return None
         assistant = ReviewConversationMessage(
@@ -137,6 +149,13 @@ def test_generate_interview_review_route_returns_ready_status():
 
     assert response.status_code == 200
     assert response.json()["reportStatus"] == "ready"
+
+
+def test_generate_interview_review_route_returns_409_when_session_not_reviewable():
+    response = client.post("/api/interview-reviews/session-conflict/generate")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "请先完成模拟面试后再生成复盘报告"
 
 
 def test_generate_interview_review_route_accepts_snapshot_body():
@@ -305,6 +324,109 @@ def test_upload_interview_review_snapshot_route_accepts_standard_json():
     assert response.json()["topicCount"] == 3
     assert stub_service.last_uploaded_snapshot is not None
     assert stub_service.last_uploaded_snapshot.sessionId == "uploaded-session-1"
+
+
+def test_upload_interview_review_snapshot_route_returns_409_for_unfinished_session():
+    response = client.post(
+        "/api/interview-reviews/upload",
+        json={
+            "snapshotVersion": 3,
+            "sessionId": "session-conflict",
+            "interviewType": "实习",
+            "category": "大模型算法",
+            "status": "completed",
+            "limits": {
+                "durationMinutes": 60,
+                "softInputChars": 1200,
+                "maxInputChars": 1500,
+                "contextWindowMessages": 8,
+                "sessionTtlMinutes": 90,
+            },
+            "jdText": "负责大模型算法研究",
+            "jdData": None,
+            "resumeSnapshot": {
+                "basicInfo": {
+                    "name": "测试用户",
+                    "personalEmail": "test@example.com",
+                    "phoneNumber": "13800138000",
+                    "age": "",
+                    "born": "",
+                    "gender": "",
+                    "desiredPosition": "算法实习生",
+                    "desiredLocation": [],
+                    "currentLocation": "",
+                    "placeOfOrigin": "",
+                    "rewards": [],
+                },
+                "workExperience": [],
+                "education": [],
+                "projects": [],
+                "academicAchievements": [],
+            },
+            "retrieval": {
+                "queryText": "",
+                "appliedFilters": {
+                    "category": None,
+                    "interviewType": None,
+                    "company": None,
+                },
+                "items": [],
+            },
+            "interviewPlan": {
+                "plan": [
+                    {"round": 1, "topic": "开场介绍", "description": "自我介绍"},
+                    {"round": 2, "topic": "项目经历", "description": "介绍项目"},
+                    {"round": 3, "topic": "算法题", "description": "编码考察"},
+                ],
+                "total_rounds": 3,
+                "estimated_duration": "20 分钟",
+                "leetcode_problem": "两数之和",
+            },
+            "interviewState": {
+                "currentRound": 3,
+                "questionsPerRound": {"1": 1, "2": 1, "3": 1},
+                "assistantQuestionCount": 3,
+                "turnCount": 3,
+                "reflectionHistory": [],
+                "closed": True,
+            },
+            "messages": [
+                {"id": "assistant-1", "role": "assistant", "content": "请先自我介绍"},
+                {"id": "user-1", "role": "user", "content": "我做过大模型训练项目"},
+            ],
+            "developerContext": None,
+            "developerTrace": [],
+            "resumeFingerprint": "fp-uploaded",
+            "createdAt": "2026-03-19T10:00:00Z",
+            "lastActiveAt": "2026-03-19T10:10:00Z",
+            "expiresAt": "2026-03-20T10:00:00Z",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "请先完成模拟面试后再生成复盘报告"
+
+
+def test_export_interview_review_route_returns_409_when_session_not_reviewable():
+    response = client.post("/api/interview-reviews/session-conflict/export")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "请先完成模拟面试后再生成复盘报告"
+
+
+def test_optimize_interview_review_topic_route_returns_409_when_session_not_reviewable():
+    response = client.post(
+        "/api/interview-reviews/session-conflict/topics/topic-1/optimize",
+        json={
+            "sessionId": "session-conflict",
+            "topicId": "topic-1",
+            "message": "how to improve",
+            "conversation": [],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "请先完成模拟面试后再生成复盘报告"
 
 
 def test_optimize_interview_review_topic_route_returns_result():

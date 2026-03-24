@@ -192,13 +192,22 @@ function mergeSessionLists(
   return [...merged.values()].sort((a, b) => b.interviewAt.localeCompare(a.interviewAt));
 }
 
+function isReviewEligibleSnapshot(snapshot: MockInterviewSessionSnapshot): boolean {
+  return snapshot.status === "completed" || snapshot.interviewState.closed === true;
+}
+
+function getReviewEligibleSessionRecords(): RecoverableSessionRecord[] {
+  return getRecoverableSessions().filter((record) => isReviewEligibleSnapshot(record.snapshot));
+}
+
 function getSnapshotBySessionId(sessionId: string): MockInterviewSessionSnapshot | null {
-  return getRecoverableSessionById(sessionId)?.snapshot ?? null;
+  const snapshot = getRecoverableSessionById(sessionId)?.snapshot ?? null;
+  return snapshot && isReviewEligibleSnapshot(snapshot) ? snapshot : null;
 }
 
 export function getInterviewReviewSessionsSnapshot(): ReviewSessionListItem[] {
   const reports = readStoredReports();
-  return getRecoverableSessions().map((record) =>
+  return getReviewEligibleSessionRecords().map((record) =>
     buildPendingListItem(record, reports[record.snapshot.sessionId])
   );
 }
@@ -255,34 +264,40 @@ export async function generateInterviewReviewReport(
   runtimeConfig?: RuntimeConfig | null
 ): Promise<ReviewGenerateReportResponse> {
   const snapshot = getSnapshotBySessionId(sessionId);
+  const sanitizedRuntimeConfig = sanitizeRuntimeConfig(runtimeConfig);
   console.info("[interview-review] snapshot lookup", {
     sessionId,
     snapshotFound: Boolean(snapshot),
   });
-  if (!snapshot) {
-    throw new Error("未找到对应的面试记录。");
-  }
 
-  const effectiveRuntimeConfig =
-    sanitizeRuntimeConfig(runtimeConfig) ?? sanitizeRuntimeConfig(snapshot.runtimeConfig);
-  const requestSnapshot = effectiveRuntimeConfig
-    ? {
-        ...snapshot,
-        runtimeConfig: effectiveRuntimeConfig,
-      }
-    : snapshot;
+  const effectiveRuntimeConfig = snapshot
+    ? sanitizedRuntimeConfig ?? sanitizeRuntimeConfig(snapshot.runtimeConfig)
+    : null;
+  const requestSnapshot = snapshot
+    ? effectiveRuntimeConfig
+      ? {
+          ...snapshot,
+          runtimeConfig: effectiveRuntimeConfig,
+        }
+      : snapshot
+    : null;
 
   console.info("[interview-review] POST /generate", {
     sessionId,
+    hasSnapshot: Boolean(requestSnapshot),
     hasRuntimeConfig: Boolean(effectiveRuntimeConfig),
-    messageCount: requestSnapshot.messages.length,
-    topicCount: requestSnapshot.interviewPlan.plan.length,
+    messageCount: requestSnapshot?.messages.length ?? 0,
+    topicCount: requestSnapshot?.interviewPlan.plan.length ?? 0,
   });
 
   const response = await fetch(`/api/interview-reviews/${encodeURIComponent(sessionId)}/generate`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(requestSnapshot),
+    ...(requestSnapshot
+      ? {
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestSnapshot),
+        }
+      : {}),
   });
 
   if (!response.ok) {

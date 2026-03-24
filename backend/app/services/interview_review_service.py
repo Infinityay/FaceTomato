@@ -175,6 +175,11 @@ def _build_optimized_answer(item: object) -> str:
     return f"回答 {topic} 时，先讲背景和目标，再讲关键动作、结果验证和复盘。"
 
 
+class InterviewReviewNotEligibleError(RuntimeError):
+    def __init__(self, message: str = "请先完成模拟面试后再生成复盘报告") -> None:
+        super().__init__(message)
+
+
 @dataclass(slots=True)
 class StoredReview:
     detail: ReviewSessionDetail
@@ -201,6 +206,8 @@ class InterviewReviewService:
             for source in self._mock_interview_service.list_review_sources():
                 generated = self._generated_reviews.get(source.sessionId)
                 snapshot = self._build_snapshot_from_source(source)
+                if not self._is_review_eligible(snapshot):
+                    continue
                 items.append(
                     ReviewSessionListItem(
                         id=source.sessionId,
@@ -266,6 +273,7 @@ class InterviewReviewService:
         self,
         snapshot: MockInterviewSessionSnapshot,
     ) -> ReviewUploadSessionResponse:
+        self._ensure_review_eligible(snapshot)
         self._uploaded_snapshots[snapshot.sessionId] = snapshot
         generated = self._generated_reviews.get(snapshot.sessionId)
         return ReviewUploadSessionResponse(
@@ -303,6 +311,7 @@ class InterviewReviewService:
         resolved_snapshot = snapshot or self._load_snapshot_for_session(session_id)
         if resolved_snapshot is None:
             return None
+        self._ensure_review_eligible(resolved_snapshot)
 
         agent_input = self.build_agent_input_from_snapshot(resolved_snapshot)
         runtime_config_request = resolved_snapshot.runtimeConfig
@@ -501,6 +510,14 @@ class InterviewReviewService:
         if source is None:
             return None
         return self._build_snapshot_from_source(source)
+
+    @staticmethod
+    def _is_review_eligible(snapshot: MockInterviewSessionSnapshot) -> bool:
+        return snapshot.status == "completed" or snapshot.interviewState.closed is True
+
+    def _ensure_review_eligible(self, snapshot: MockInterviewSessionSnapshot) -> None:
+        if not self._is_review_eligible(snapshot):
+            raise InterviewReviewNotEligibleError()
 
     def _build_snapshot_from_source(
         self, source: InterviewReviewSourceResponse

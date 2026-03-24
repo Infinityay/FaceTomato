@@ -20,6 +20,7 @@ import {
   getInterviewReviewSessionsSnapshot,
   optimizeInterviewReviewTopic,
 } from "../lib/interviewReviewApi";
+import { getRecoverableSessionById } from "../lib/mockInterviewRecovery";
 import type {
   ReviewChatMessage,
   ReviewMatchedAnswer,
@@ -147,6 +148,14 @@ const buildTopicProblemSummary = (topic: ReviewTopic) => {
   return merged.length > 0 ? Array.from(new Set(merged)) : ["当前没有提炼出明确问题，建议结合考察点继续补充细节。"];
 };
 
+const isReviewEligibleSessionId = (sessionId: string) => {
+  const snapshot = getRecoverableSessionById(sessionId)?.snapshot;
+  if (!snapshot) {
+    return true;
+  }
+  return snapshot.status === "completed" || snapshot.interviewState.closed === true;
+};
+
 const InterviewReviewPage = () => {
   const runtimeConfig = useRuntimeSettingsStore();
   const [sessions, setSessions] = useState<ReviewSessionListItem[]>(() => getInterviewReviewSessionsSnapshot());
@@ -222,14 +231,21 @@ const InterviewReviewPage = () => {
     setOptimizationError(null);
     setChatMessages([]);
     const detail = getInterviewReviewSessionDetailSnapshot(sessionId);
+    const reviewEligible = isReviewEligibleSessionId(sessionId);
     console.info("[interview-review] open record", {
       sessionId,
       localDetailFound: Boolean(detail),
       localReportStatus: detail?.reportStatus ?? null,
       localTopicCount: detail?.topics.length ?? 0,
+      reviewEligible,
     });
     setSelectedSession(detail);
     setSelectedTopicId(getDefaultTopicId(detail));
+
+    if (!reviewEligible) {
+      setOptimizationError("请先完成模拟面试后再生成复盘报告");
+      return;
+    }
 
     if ((reportStatuses[sessionId] ?? detail?.reportStatus) !== "ready") {
       void triggerReportGeneration(sessionId)
@@ -302,6 +318,7 @@ const InterviewReviewPage = () => {
               <CardTitle className="text-center text-xl">选择面试记录</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
+              {optimizationError ? <div className="rounded-2xl border border-rose-500/20 bg-rose-500/5 px-4 py-4 text-sm leading-6 text-rose-600 dark:text-rose-300">{optimizationError}</div> : null}
               {interviewRecords.length === 0 ? (
                 <p className="text-center text-sm text-muted-foreground">请先在"模拟面试"页面完成模拟面试，完成后此处即可显示面试记录。</p>
               ) : null}

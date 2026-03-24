@@ -14,7 +14,11 @@ from app.schemas.interview_review import (
     ReviewUploadSessionResponse,
 )
 from app.schemas.mock_interview import MockInterviewSessionSnapshot
-from app.services.interview_review_service import InterviewReviewService, get_interview_review_service
+from app.services.interview_review_service import (
+    InterviewReviewNotEligibleError,
+    InterviewReviewService,
+    get_interview_review_service,
+)
 
 router = APIRouter(prefix="/interview-reviews", tags=["interview-reviews"])
 
@@ -31,7 +35,10 @@ async def upload_interview_review_snapshot(
     snapshot: MockInterviewSessionSnapshot,
     service: InterviewReviewService = Depends(get_interview_review_service),
 ) -> ReviewUploadSessionResponse:
-    return service.upload_snapshot(snapshot)
+    try:
+        return service.upload_snapshot(snapshot)
+    except InterviewReviewNotEligibleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/{session_id}", response_model=ReviewSessionDetail)
@@ -53,7 +60,10 @@ async def generate_interview_review(
 ) -> ReviewGenerateReportResponse:
     if snapshot is not None and snapshot.sessionId != session_id:
         raise HTTPException(status_code=400, detail="Session id mismatch")
-    result = service.generate_review(session_id, snapshot=snapshot)
+    try:
+        result = service.generate_review(session_id, snapshot=snapshot)
+    except InterviewReviewNotEligibleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="Mock interview session not found")
     return result
@@ -64,7 +74,10 @@ async def export_interview_review(
     session_id: str,
     service: InterviewReviewService = Depends(get_interview_review_service),
 ) -> ReviewExportReportResponse:
-    result = service.export_review(session_id)
+    try:
+        result = service.export_review(session_id)
+    except InterviewReviewNotEligibleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="Mock interview session not found")
     return result
@@ -79,7 +92,10 @@ async def optimize_interview_review_topic(
 ) -> ReviewOptimizationResponse:
     if request.sessionId != session_id or request.topicId != topic_id:
         raise HTTPException(status_code=400, detail="Session or topic id mismatch")
-    result = service.optimize_topic(request)
+    try:
+        result = service.optimize_topic(request)
+    except InterviewReviewNotEligibleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="Interview review session or topic not found")
     return result

@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import pytest
+
 from app.prompts.interview_review_prompts import get_interview_review_prompts
 from app.schemas.interview_evaluation import InterviewEvaluationReport
-from app.schemas.interview_review import ReviewOptimizationRequest, ReviewTopicOptimizationResult
+from app.schemas.interview_review import (
+    InterviewReviewSourceResponse,
+    ReviewOptimizationRequest,
+    ReviewTopicOptimizationResult,
+)
 from app.schemas.mock_interview import MockInterviewSessionSnapshot
-from app.services.interview_review_service import InterviewReviewService
+from app.services.interview_review_service import (
+    InterviewReviewNotEligibleError,
+    InterviewReviewService,
+)
 
 
 class StubAgent:
@@ -15,6 +24,17 @@ class StubAgent:
     def evaluate(self, _payload):
         self.calls += 1
         return self.report
+
+
+class ReviewSourceMockInterviewService:
+    def __init__(self, sources=None):
+        self._sources = {source.sessionId: source for source in (sources or [])}
+
+    def list_review_sources(self):
+        return list(self._sources.values())
+
+    def get_review_source(self, session_id: str):
+        return self._sources.get(session_id)
 
 
 class SequenceLLM:
@@ -139,6 +159,39 @@ def build_report() -> InterviewEvaluationReport:
     )
 
 
+def build_review_source(status: str = "completed", closed: bool = True) -> InterviewReviewSourceResponse:
+    snapshot = build_snapshot()
+    snapshot.status = status
+    snapshot.interviewState.closed = closed
+    return InterviewReviewSourceResponse.model_validate(
+        {
+            "sessionId": snapshot.sessionId,
+            "status": snapshot.status,
+            "createdAt": snapshot.createdAt,
+            "updatedAt": snapshot.lastActiveAt,
+            "expiresAt": snapshot.expiresAt,
+            "interviewMeta": {
+                "interviewType": snapshot.interviewType,
+                "category": snapshot.category,
+            },
+            "resume": {
+                "fingerprint": snapshot.resumeFingerprint,
+                "snapshot": snapshot.resumeSnapshot.model_dump(mode="json"),
+            },
+            "jd": {
+                "text": snapshot.jdText,
+                "data": snapshot.jdData.model_dump(mode="json") if snapshot.jdData else None,
+            },
+            "interview": {
+                "plan": snapshot.interviewPlan.model_dump(mode="json"),
+                "state": snapshot.interviewState.model_dump(mode="json"),
+                "messages": [message.model_dump(mode="json") for message in snapshot.messages],
+                "retrieval": snapshot.retrieval.model_dump(mode="json"),
+            },
+        }
+    )
+
+
 def test_generate_review_prefers_runtime_config(monkeypatch):
     snapshot = build_snapshot()
     default_agent = StubAgent(build_report())
@@ -186,6 +239,83 @@ def test_upload_snapshot_registers_pending_session_and_supports_followup_generat
     assert any(item.id == snapshot.sessionId and item.reportStatus == "pending" for item in listed)
     assert generate_result is not None
     assert generate_result.reportStatus == "ready"
+
+
+def test_generate_review_rejects_unfinished_snapshot():
+    snapshot = build_snapshot()
+    snapshot.status = "ready"
+    snapshot.interviewState.closed = False
+    service = InterviewReviewService(mock_interview_service=object(), evaluation_agent=StubAgent(build_report()))
+
+    with pytest.raises(InterviewReviewNotEligibleError, match="请先完成模拟面试后再生成复盘报告"):
+        service.generate_review(snapshot.sessionId, snapshot=snapshot)
+
+
+def test_upload_snapshot_rejects_unfinished_snapshot():
+    snapshot = build_snapshot()
+    snapshot.status = "ready"
+    snapshot.interviewState.closed = False
+    service = InterviewReviewService(mock_interview_service=object(), evaluation_agent=StubAgent(build_report()))
+
+    with pytest.raises(InterviewReviewNotEligibleError, match="请先完成模拟面试后再生成复盘报告"):
+        service.upload_snapshot(snapshot)
+
+
+def test_export_review_cannot_bypass_unfinished_uploaded_snapshot():
+    snapshot = build_snapshot()
+    snapshot.status = "ready"
+    snapshot.interviewState.closed = False
+    service = InterviewReviewService(mock_interview_service=object(), evaluation_agent=StubAgent(build_report()))
+    service._uploaded_snapshots[snapshot.sessionId] = snapshot
+
+    with pytest.raises(InterviewReviewNotEligibleError, match="请先完成模拟面试后再生成复盘报告"):
+        service.export_review(snapshot.sessionId)
+
+
+def test_optimize_topic_cannot_bypass_unfinished_uploaded_snapshot():
+    snapshot = build_snapshot()
+    snapshot.status = "ready"
+    snapshot.interviewState.closed = False
+    service = InterviewReviewService(mock_interview_service=object(), evaluation_agent=StubAgent(build_report()))
+    service._uploaded_snapshots[snapshot.sessionId] = snapshot
+
+    with pytest.raises(InterviewReviewNotEligibleError, match="请先完成模拟面试后再生成复盘报告"):
+        service.optimize_topic(
+            ReviewOptimizationRequest.model_validate(
+                {
+                    "sessionId": snapshot.sessionId,
+                    "topicId": "topic-session-1-1",
+                    "message": "帮我打磨回答",
+                    "conversation": [],
+                }
+            )
+        )
+
+
+def test_generate_review_accepts_mixed_finished_snapshot():
+    snapshot = build_snapshot()
+    snapshot.status = "ready"
+    snapshot.interviewState.closed = True
+    service = InterviewReviewService(mock_interview_service=object(), evaluation_agent=StubAgent(build_report()))
+
+    result = service.generate_review(snapshot.sessionId, snapshot=snapshot)
+
+    assert result is not None
+    assert result.reportStatus == "ready"
+
+
+def test_list_reviews_filters_unfinished_remote_sources():
+    unfinished_source = build_review_source(status="ready", closed=False)
+    finished_source = build_review_source(status="ready", closed=True)
+    finished_source.sessionId = "session-2"
+    service = InterviewReviewService(
+        mock_interview_service=ReviewSourceMockInterviewService([unfinished_source, finished_source]),
+        evaluation_agent=StubAgent(build_report()),
+    )
+
+    items = service.list_reviews()
+
+    assert [item.id for item in items] == ["session-2"]
 
 
 def test_build_review_detail_aligns_focus_and_answer_points_without_truncating_focus_or_answers():

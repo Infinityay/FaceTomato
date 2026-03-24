@@ -22,7 +22,25 @@ vi.stubGlobal(
   }))
 );
 
-const snapshot = {
+function buildSnapshot(overrides: Partial<typeof baseSnapshot> = {}) {
+  return {
+    ...baseSnapshot,
+    ...overrides,
+    interviewState: {
+      ...baseSnapshot.interviewState,
+      ...overrides.interviewState,
+    },
+    interviewPlan: overrides.interviewPlan
+      ? {
+          ...baseSnapshot.interviewPlan,
+          ...overrides.interviewPlan,
+        }
+      : baseSnapshot.interviewPlan,
+    runtimeConfig: overrides.runtimeConfig === undefined ? baseSnapshot.runtimeConfig : overrides.runtimeConfig,
+  };
+}
+
+const baseSnapshot = {
   sessionId: "session-1",
   interviewType: "实习",
   category: "大模型算法",
@@ -116,6 +134,8 @@ const snapshot = {
   expiresAt: "2099-03-20T10:00:00.000Z",
 };
 
+const snapshot = buildSnapshot();
+
 const generatedDetail = {
   id: "session-1",
   title: "算法实习生模拟面试复盘",
@@ -180,6 +200,163 @@ describe("InterviewReviewPage", () => {
     localStorage.clear();
     appendChildSpy.mockClear();
     removeChildSpy.mockClear();
+  });
+
+  it("does not show unfinished sessions in the review list", async () => {
+    localStorage.setItem(
+      "face-tomato-mock-interview-recoverable-sessions",
+      JSON.stringify([
+        { snapshot: buildSnapshot({ sessionId: "session-ready" }) },
+        {
+          snapshot: buildSnapshot({
+            sessionId: "session-unfinished",
+            status: "ready",
+            interviewState: { closed: false },
+          }),
+        },
+      ])
+    );
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("算法实习生")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByText("session-unfinished")).not.toBeInTheDocument();
+      expect(screen.getAllByRole("button", { name: /查看复盘/i })).toHaveLength(1);
+    });
+  });
+
+  it("does not auto-generate a report for unfinished sessions", async () => {
+    localStorage.setItem(
+      "face-tomato-mock-interview-recoverable-sessions",
+      JSON.stringify([
+        {
+          snapshot: buildSnapshot({
+            sessionId: "session-unfinished",
+            status: "ready",
+            interviewState: { closed: false },
+          }),
+        },
+      ])
+    );
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/interview-reviews")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                ...generatedDetail,
+                id: "session-unfinished",
+                reportStatus: "pending",
+                overallScore: null,
+                topicCount: 3,
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+      if (url.endsWith("/api/interview-reviews/session-unfinished")) {
+        return new Response(
+          JSON.stringify({
+            ...generatedDetail,
+            id: "session-unfinished",
+            reportStatus: "pending",
+            topics: [],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /查看复盘/i }));
+
+    await screen.findByText("请先完成模拟面试后再生成复盘报告");
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/interview-reviews/session-unfinished/generate"))
+    ).toBe(false);
+  });
+
+  it("treats mixed finished snapshots as reviewable when interviewState.closed is true", async () => {
+    localStorage.setItem(
+      "face-tomato-mock-interview-recoverable-sessions",
+      JSON.stringify([
+        {
+          snapshot: buildSnapshot({
+            sessionId: "session-mixed",
+            status: "ready",
+            interviewState: { closed: true },
+          }),
+        },
+      ])
+    );
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/interview-reviews")) {
+        return new Response(JSON.stringify({ items: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      if (url.endsWith("/api/interview-reviews/session-mixed")) {
+        if (!init?.method || init.method === "GET") {
+          return new Response(
+            JSON.stringify({
+              ...generatedDetail,
+              id: "session-mixed",
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }
+          );
+        }
+      }
+
+      if (url.endsWith("/api/interview-reviews/session-mixed/generate")) {
+        return new Response(
+          JSON.stringify({
+            sessionId: "session-mixed",
+            reportStatus: "ready",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /查看复盘/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/interview-reviews/session-mixed/generate",
+        expect.objectContaining({ method: "POST" })
+      );
+    });
   });
 
   it("starts generating the AI report immediately after clicking view review", async () => {
