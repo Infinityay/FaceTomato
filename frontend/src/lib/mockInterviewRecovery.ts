@@ -35,6 +35,8 @@ function isRecoverableSnapshot(snapshot: unknown): snapshot is MockInterviewSess
     candidate.interviewState != null &&
     Array.isArray(candidate.messages) &&
     Array.isArray(candidate.developerTrace) &&
+    (candidate.pendingAssistantPhase == null || typeof candidate.pendingAssistantPhase === "string") &&
+    (candidate.streamingMessageId == null || typeof candidate.streamingMessageId === "string") &&
     typeof candidate.resumeFingerprint === "string" &&
     typeof candidate.createdAt === "string" &&
     typeof candidate.lastActiveAt === "string" &&
@@ -104,6 +106,17 @@ export function upsertRecoverableSession(record: RecoverableSessionRecord) {
   const records = readRecords().filter((item) => item.snapshot.sessionId !== record.snapshot.sessionId);
   records.unshift(record);
   writeRecords(records.slice(0, 10));
+}
+
+export function updateRecoverableSessionSnapshot(
+  sessionId: string,
+  updater: (snapshot: MockInterviewSessionSnapshot) => MockInterviewSessionSnapshot
+) {
+  const records = readRecords();
+  const updated = records.map((item) =>
+    item.snapshot.sessionId === sessionId ? { snapshot: updater(item.snapshot) } : item
+  );
+  writeRecords(updated);
 }
 
 export function removeRecoverableSession(sessionId: string) {

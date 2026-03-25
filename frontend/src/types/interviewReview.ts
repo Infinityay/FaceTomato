@@ -93,6 +93,7 @@ export type ReviewOptimizationRequest = {
   sessionId: string;
   topicId: string;
   message: string;
+  topic?: ReviewTopic;
   conversation?: ReviewConversationMessage[];
   runtimeConfig?: RuntimeConfig;
 };
@@ -109,6 +110,7 @@ export type ReviewOptimizationResponse = {
 export type ReviewGenerateReportResponse = {
   sessionId: string;
   reportStatus: ReviewReportStatus;
+  detail?: ReviewSessionDetail | null;
 };
 
 export type ReviewExportReportResponse = {

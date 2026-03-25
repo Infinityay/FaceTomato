@@ -12,6 +12,12 @@ interface SseEvent {
   data: string;
 }
 
+const inFlightMockInterviewReplies = new Set<string>();
+
+export function isMockInterviewReplyStreaming(sessionId: string): boolean {
+  return inFlightMockInterviewReplies.has(sessionId);
+}
+
 const CREATE_PROGRESS_STAGE_MIN_MS = 250;
 
 const handleApiError = async (response: Response): Promise<never> => {
@@ -165,6 +171,8 @@ export async function streamMockInterviewReply({
   onRoundTransition,
   runtimeConfig,
 }: StreamMockInterviewReplyInput): Promise<void> {
+  inFlightMockInterviewReplies.add(sessionId);
+  try {
   const sanitizedRuntimeConfig = sanitizeRuntimeConfig(runtimeConfig);
   const response = await fetch(`/api/mock-interview/session/${sessionId}/stream`, {
     method: "POST",
@@ -237,4 +245,7 @@ export async function streamMockInterviewReply({
   }
 
   scheduler.flushNow();
+  } finally {
+    inFlightMockInterviewReplies.delete(sessionId);
+  }
 }

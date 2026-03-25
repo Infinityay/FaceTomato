@@ -195,6 +195,8 @@ export interface MockInterviewSessionSnapshot {
   messages: MockInterviewMessage[];
   developerContext: MockInterviewDeveloperContext | null;
   developerTrace: MockInterviewDeveloperTraceEvent[];
+  pendingAssistantPhase?: PendingAssistantPhase;
+  streamingMessageId?: string | null;
   runtimeConfig?: RuntimeConfig | null;
   resumeFingerprint: string;
   createdAt: string;

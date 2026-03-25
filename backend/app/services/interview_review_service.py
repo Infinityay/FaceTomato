@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
 import json
-import logging
-import time
 from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -21,7 +18,6 @@ from app.schemas.interview_review import (
     InterviewReviewSourceResponse,
     ReviewConversationMessage,
     ReviewExportReportResponse,
-    ReviewGenerateReportResponse,
     ReviewMatchedAnswer,
     ReviewMessageCitation,
     ReviewMessageEvidence,
@@ -49,9 +45,6 @@ from app.services.runtime_config import resolve_runtime_config
 from app.utils.structured_output import invoke_with_fallback
 
 
-logger = logging.getLogger(__name__)
-
-
 def _format_datetime(value: datetime) -> str:
     return value.astimezone().strftime("%Y-%m-%d %H:%M")
 
@@ -73,43 +66,6 @@ def _shorten_question(value: str) -> str:
 
 def _normalize_display_text(value: str) -> str:
     return _normalize_whitespace(value)
-
-
-def _snapshot_log_fields(snapshot: MockInterviewSessionSnapshot | None) -> dict[str, object]:
-    if snapshot is None:
-        return {
-            "status": None,
-            "interview_closed": None,
-            "current_round": None,
-            "total_rounds": None,
-            "message_count": None,
-            "has_runtime_override": False,
-        }
-    return {
-        "status": snapshot.status,
-        "interview_closed": snapshot.interviewState.closed,
-        "current_round": snapshot.interviewState.currentRound,
-        "total_rounds": snapshot.interviewPlan.total_rounds,
-        "message_count": len(snapshot.messages),
-        "has_runtime_override": snapshot.runtimeConfig is not None,
-    }
-
-
-def _determine_snapshot_source(
-    session_id: str,
-    snapshot: MockInterviewSessionSnapshot | None,
-    uploaded_snapshots: dict[str, MockInterviewSessionSnapshot],
-    mock_interview_service: MockInterviewService,
-) -> str:
-    if snapshot is not None:
-        return "inline"
-    if session_id in uploaded_snapshots:
-        return "uploaded"
-    if hasattr(mock_interview_service, "get_review_source"):
-        source = mock_interview_service.get_review_source(session_id)
-        if source is not None:
-            return "review_source"
-    return "missing"
 
 
 def _build_answer_highlights(item: object, focus_count: int) -> list[str]:
@@ -222,12 +178,6 @@ class InterviewReviewNotEligibleError(RuntimeError):
         super().__init__(message)
 
 
-@dataclass(slots=True)
-class StoredReview:
-    detail: ReviewSessionDetail
-    conversations: dict[str, list[ReviewConversationMessage]] = field(default_factory=dict)
-
-
 class InterviewReviewService:
     """Generate interview review reports from the canonical mock interview snapshot."""
 
@@ -238,117 +188,7 @@ class InterviewReviewService:
     ) -> None:
         self._mock_interview_service = mock_interview_service or get_mock_interview_service()
         self._evaluation_agent = evaluation_agent or get_interview_evaluation_agent()
-        self._generated_reviews: dict[str, StoredReview] = {}
-        self._uploaded_snapshots: dict[str, MockInterviewSessionSnapshot] = {}
         self._review_prompts = get_interview_review_prompts()
-
-    def list_reviews(self) -> list[ReviewSessionListItem]:
-        items: list[ReviewSessionListItem] = []
-        if hasattr(self._mock_interview_service, "list_review_sources"):
-            for source in self._mock_interview_service.list_review_sources():
-                generated = self._generated_reviews.get(source.sessionId)
-                snapshot = self._build_snapshot_from_source(source)
-                if not self._is_review_eligible(snapshot):
-                    continue
-                items.append(
-                    ReviewSessionListItem(
-                        id=source.sessionId,
-                        title=self._derive_title(snapshot),
-                        role=self._derive_role(snapshot),
-                        round="模拟面试",
-                        interviewAt=_format_datetime(snapshot.createdAt),
-                        reportStatus="ready" if generated else "pending",
-                        overallScore=generated.detail.overallScore if generated else None,
-                        topicCount=len(generated.detail.topics) if generated else snapshot.interviewPlan.total_rounds,
-                    )
-                )
-            existing_ids = {item.id for item in items}
-            for session_id, snapshot in self._uploaded_snapshots.items():
-                if session_id in existing_ids:
-                    continue
-                generated = self._generated_reviews.get(session_id)
-                items.append(
-                    ReviewSessionListItem(
-                        id=session_id,
-                        title=self._derive_title(snapshot),
-                        role=self._derive_role(snapshot),
-                        round="模拟面试",
-                        interviewAt=_format_datetime(snapshot.createdAt),
-                        reportStatus="ready" if generated else "pending",
-                        overallScore=generated.detail.overallScore if generated else None,
-                        topicCount=len(generated.detail.topics) if generated else snapshot.interviewPlan.total_rounds,
-                    )
-                )
-            return items
-
-        for session_id, stored in self._generated_reviews.items():
-            items.append(
-                ReviewSessionListItem(
-                    id=session_id,
-                    title=stored.detail.title,
-                    role=stored.detail.role,
-                    round=stored.detail.round,
-                    interviewAt=stored.detail.interviewAt,
-                    reportStatus=stored.detail.reportStatus,
-                    overallScore=stored.detail.overallScore,
-                    topicCount=len(stored.detail.topics),
-                )
-            )
-        for session_id, snapshot in self._uploaded_snapshots.items():
-            if session_id in self._generated_reviews:
-                continue
-            items.append(
-                ReviewSessionListItem(
-                    id=session_id,
-                    title=self._derive_title(snapshot),
-                    role=self._derive_role(snapshot),
-                    round="模拟面试",
-                    interviewAt=_format_datetime(snapshot.createdAt),
-                    reportStatus="pending",
-                    overallScore=None,
-                    topicCount=snapshot.interviewPlan.total_rounds,
-                )
-            )
-        return items
-
-    def upload_snapshot(
-        self,
-        snapshot: MockInterviewSessionSnapshot,
-    ) -> ReviewUploadSessionResponse:
-        start = time.perf_counter()
-        logger.info(
-            "interview review upload started",
-            extra={
-                "session_id": snapshot.sessionId,
-                **_snapshot_log_fields(snapshot),
-            },
-        )
-        self._ensure_review_eligible(snapshot)
-        self._uploaded_snapshots[snapshot.sessionId] = snapshot
-        generated = self._generated_reviews.get(snapshot.sessionId)
-        result = ReviewUploadSessionResponse(
-            sessionId=snapshot.sessionId,
-            title=self._derive_title(snapshot),
-            role=self._derive_role(snapshot),
-            round="模拟面试",
-            interviewAt=_format_datetime(snapshot.createdAt),
-            reportStatus="ready" if generated else "pending",
-            topicCount=len(generated.detail.topics) if generated else snapshot.interviewPlan.total_rounds,
-        )
-        logger.info(
-            "interview review upload stored snapshot",
-            extra={
-                "session_id": snapshot.sessionId,
-                **_snapshot_log_fields(snapshot),
-                "report_status": result.reportStatus,
-                "elapsed_ms": round((time.perf_counter() - start) * 1000),
-            },
-        )
-        return result
-
-    def get_review(self, session_id: str) -> ReviewSessionDetail | None:
-        stored = self._generated_reviews.get(session_id)
-        return stored.detail if stored else None
 
     def build_agent_input_from_snapshot(
         self, snapshot: MockInterviewSessionSnapshot
@@ -363,181 +203,53 @@ class InterviewReviewService:
             messages=snapshot.messages,
         )
 
-    def generate_review(
+    def generate_review_events(
         self,
         session_id: str,
         snapshot: MockInterviewSessionSnapshot | None = None,
-    ) -> ReviewGenerateReportResponse | None:
-        start = time.perf_counter()
-        snapshot_source = _determine_snapshot_source(
-            session_id,
-            snapshot,
-            self._uploaded_snapshots,
-            self._mock_interview_service,
-        )
-        logger.info(
-            "interview review generation started",
-            extra={
-                "session_id": session_id,
-                "snapshot_source": snapshot_source,
-                "has_snapshot": snapshot is not None,
-            },
-        )
+    ):
         resolved_snapshot = snapshot or self._load_snapshot_for_session(session_id)
         if resolved_snapshot is None:
-            logger.info(
-                "interview review generation missing snapshot",
-                extra={
-                    "session_id": session_id,
-                    "snapshot_source": "missing",
-                    "elapsed_ms": round((time.perf_counter() - start) * 1000),
-                },
-            )
-            return None
-        logger.info(
-            "interview review generation resolved snapshot",
-            extra={
-                "session_id": session_id,
-                "snapshot_source": snapshot_source,
-                **_snapshot_log_fields(resolved_snapshot),
-            },
-        )
+            yield {"type": "not_found", "sessionId": session_id}
+            return
         self._ensure_review_eligible(resolved_snapshot)
 
         agent_input = self.build_agent_input_from_snapshot(resolved_snapshot)
-        logger.info(
-            "interview review generation built agent input",
-            extra={
-                "session_id": session_id,
-                "message_count": len(agent_input.messages),
-                "current_round": agent_input.interviewState.currentRound,
-                "total_rounds": agent_input.interviewPlan.total_rounds,
-            },
-        )
         runtime_config_request = resolved_snapshot.runtimeConfig
         evaluation_agent = (
             InterviewEvaluationAgent.from_runtime_config(resolve_runtime_config(runtime_config_request))
             if runtime_config_request
             else self._evaluation_agent
         )
-        logger.info(
-            "interview review generation resolved evaluation agent",
-            extra={
-                "session_id": session_id,
-                "uses_runtime_override": runtime_config_request is not None,
-            },
-        )
-        evaluation = evaluation_agent.evaluate(agent_input)
-        logger.info(
-            "interview review generation completed evaluation",
-            extra={
-                "session_id": session_id,
-                "topic_assessment_count": len(evaluation.topicAssessments),
-                "overall_score": evaluation.overallScore,
-            },
-        )
-        detail = self._build_review_detail_from_evaluation(resolved_snapshot, evaluation)
-        logger.info(
-            "interview review generation built review detail",
-            extra={
-                "session_id": session_id,
-                "report_status": detail.reportStatus,
-                "topic_count": len(detail.topics),
-                "overall_score": detail.overallScore,
-            },
-        )
-        self._generated_reviews[session_id] = StoredReview(detail=detail)
-        elapsed_ms = round((time.perf_counter() - start) * 1000)
-        logger.info(
-            "interview review generation stored review",
-            extra={
-                "session_id": session_id,
-                "report_status": detail.reportStatus,
-                "elapsed_ms": elapsed_ms,
-            },
-        )
-        return ReviewGenerateReportResponse(sessionId=session_id, reportStatus="ready")
+
+        for event in evaluation_agent.evaluate_with_progress(agent_input):
+            event_type = event.get("type")
+            if event_type == "done":
+                report = event["report"]
+                detail = self._build_review_detail_from_evaluation(resolved_snapshot, report)
+                yield {
+                    "type": "done",
+                    "sessionId": session_id,
+                    "reportStatus": "ready",
+                    "detail": detail.model_dump(mode="json"),
+                }
+                return
+            yield event
 
     def export_review(self, session_id: str) -> ReviewExportReportResponse | None:
-        start = time.perf_counter()
-        logger.info(
-            "interview review export started",
-            extra={"session_id": session_id},
-        )
-        if session_id not in self._generated_reviews:
-            logger.info(
-                "interview review export triggering generation",
-                extra={"session_id": session_id},
-            )
-            generated = self.generate_review(session_id)
-            if generated is None:
-                logger.info(
-                    "interview review export missing review",
-                    extra={
-                        "session_id": session_id,
-                        "elapsed_ms": round((time.perf_counter() - start) * 1000),
-                    },
-                )
-                return None
-        result = ReviewExportReportResponse(
+        return ReviewExportReportResponse(
             sessionId=session_id,
             exportStatus="ready",
             downloadUrl=f"/api/interview-reviews/{session_id}/export/download",
             fileName=f"interview-review-{session_id}.json",
         )
-        logger.info(
-            "interview review export metadata ready",
-            extra={
-                "session_id": session_id,
-                "export_status": result.exportStatus,
-                "elapsed_ms": round((time.perf_counter() - start) * 1000),
-            },
-        )
-        return result
 
-    def optimize_topic(self, request: ReviewOptimizationRequest) -> ReviewOptimizationResponse | None:
-        start = time.perf_counter()
-        logger.info(
-            "interview review topic optimization started",
-            extra={
-                "session_id": request.sessionId,
-                "topic_id": request.topicId,
-                "conversation_length": len(request.conversation),
-                "has_runtime_override": request.runtimeConfig is not None,
-            },
-        )
-        stored = self._generated_reviews.get(request.sessionId)
-        if stored is None:
-            logger.info(
-                "interview review topic optimization triggering generation",
-                extra={
-                    "session_id": request.sessionId,
-                    "topic_id": request.topicId,
-                },
-            )
-            generated = self.generate_review(request.sessionId)
-            if generated is None:
-                logger.info(
-                    "interview review topic optimization missing review",
-                    extra={
-                        "session_id": request.sessionId,
-                        "topic_id": request.topicId,
-                        "elapsed_ms": round((time.perf_counter() - start) * 1000),
-                    },
-                )
-                return None
-            stored = self._generated_reviews[request.sessionId]
-
-        topic = next((item for item in stored.detail.topics if item.id == request.topicId), None)
+    def optimize_topic(
+        self,
+        request: ReviewOptimizationRequest,
+    ) -> ReviewOptimizationResponse | None:
+        topic = request.topic
         if topic is None:
-            logger.info(
-                "interview review topic optimization topic missing",
-                extra={
-                    "session_id": request.sessionId,
-                    "topic_id": request.topicId,
-                    "elapsed_ms": round((time.perf_counter() - start) * 1000),
-                },
-            )
             return None
 
         optimization = self._optimize_topic_with_llm(topic, request)
@@ -568,7 +280,7 @@ class InterviewReviewService:
                     id=f"question-{topic.id}",
                     label=f"{topic.name} 核心问题",
                     snippet=topic.coreQuestion,
-                )
+                ),
             ],
             evidence=[
                 ReviewMessageEvidence(
@@ -580,7 +292,7 @@ class InterviewReviewService:
                     id=f"optimized-answer-{topic.id}",
                     type="optimized_answer",
                     content=optimization.optimizedAnswer,
-                )
+                ),
             ],
             usage=ReviewMessageUsage(
                 inputTokens=max(12, len(request.message) // 2),
@@ -591,16 +303,6 @@ class InterviewReviewService:
         )
 
         conversation = [*existing_conversation, user_message, assistant_message]
-        stored.conversations[request.topicId] = conversation
-        logger.info(
-            "interview review topic optimization stored conversation",
-            extra={
-                "session_id": request.sessionId,
-                "topic_id": request.topicId,
-                "conversation_length": len(conversation),
-                "elapsed_ms": round((time.perf_counter() - start) * 1000),
-            },
-        )
         return ReviewOptimizationResponse(
             topicId=request.topicId,
             reply=assistant_message.content,
@@ -665,11 +367,15 @@ class InterviewReviewService:
                 f"建议先正面回应“{topic.coreQuestion}”，再按背景、动作、结果顺序补齐关键缺口。"
             ),
             optimizedAnswer=topic.optimizedAnswer or _build_optimized_answer(topic),
-            suggestions=(topic.suggestions[:3] if topic.suggestions else [
-                "先正面回答核心问题，不要先铺背景。",
-                "补齐缺失的关键动作、取舍依据或结果。",
-                "用一句话收束结论，避免回答发散。",
-            ]),
+            suggestions=(
+                topic.suggestions[:3]
+                if topic.suggestions
+                else [
+                    "先正面回答核心问题，不要先铺背景。",
+                    "补齐缺失的关键动作、取舍依据或结果。",
+                    "用一句话收束结论，避免回答发散。",
+                ]
+            ),
         )
 
     def _optimize_topic_with_llm(
@@ -677,16 +383,6 @@ class InterviewReviewService:
         topic: ReviewTopic,
         request: ReviewOptimizationRequest,
     ) -> ReviewTopicOptimizationResult:
-        start = time.perf_counter()
-        logger.info(
-            "interview review topic llm optimization started",
-            extra={
-                "session_id": request.sessionId,
-                "topic_id": request.topicId,
-                "has_runtime_override": request.runtimeConfig is not None,
-                "conversation_length": len(request.conversation),
-            },
-        )
         payload = self._build_topic_optimization_input(topic, request)
         try:
             optimizer_agent = (
@@ -697,41 +393,25 @@ class InterviewReviewService:
             optimization_llm = optimizer_agent.chat_model.with_structured_output(
                 ReviewTopicOptimizationResult
             )
-            prompts = optimizer_agent.prompts if hasattr(optimizer_agent, "prompts") else self._review_prompts
+            prompts = (
+                optimizer_agent.prompts
+                if hasattr(optimizer_agent, "prompts")
+                else self._review_prompts
+            )
             messages = self._build_topic_optimization_messages(payload, prompts)
             result = invoke_with_fallback(
                 optimization_llm,
                 messages,
                 ReviewTopicOptimizationResult,
             )
-            optimization_result = result or self._build_fallback_topic_optimization(topic, request)
-            logger.info(
-                "interview review topic llm optimization completed",
-                extra={
-                    "session_id": request.sessionId,
-                    "topic_id": request.topicId,
-                    "suggestion_count": len(optimization_result.suggestions),
-                    "elapsed_ms": round((time.perf_counter() - start) * 1000),
-                },
-            )
-            return optimization_result
+            return result or self._build_fallback_topic_optimization(topic, request)
         except Exception:
-            logger.exception(
-                "interview review topic llm optimization failed, using fallback",
-                extra={
-                    "session_id": request.sessionId,
-                    "topic_id": request.topicId,
-                    "elapsed_ms": round((time.perf_counter() - start) * 1000),
-                },
-            )
             return self._build_fallback_topic_optimization(topic, request)
 
     def _load_snapshot_for_session(
-        self, session_id: str
+        self,
+        session_id: str,
     ) -> MockInterviewSessionSnapshot | None:
-        uploaded = self._uploaded_snapshots.get(session_id)
-        if uploaded is not None:
-            return uploaded
         if not hasattr(self._mock_interview_service, "get_review_source"):
             return None
         source = self._mock_interview_service.get_review_source(session_id)
@@ -800,7 +480,11 @@ class InterviewReviewService:
                 ReviewTopic(
                     id=f"topic-{snapshot.sessionId}-{index}",
                     name=item.topic,
-                    domain=_rubric_name_to_label(item.rubricScores[0].name) if item.rubricScores else "能力评估",
+                    domain=(
+                        _rubric_name_to_label(item.rubricScores[0].name)
+                        if item.rubricScores
+                        else "能力评估"
+                    ),
                     score=item.overallScore,
                     coreQuestion=_shorten_question(item.question),
                     assessmentFocus=assessment_focus,
@@ -828,7 +512,10 @@ class InterviewReviewService:
             summary=evaluation.summary,
             strengths=evaluation.strengths,
             risks=evaluation.risks,
-            priority=evaluation.recommendation or (evaluation.priorityActions[0] if evaluation.priorityActions else ""),
+            priority=(
+                evaluation.recommendation
+                or (evaluation.priorityActions[0] if evaluation.priorityActions else "")
+            ),
             topics=topics,
         )
 

@@ -26,6 +26,7 @@ import {
   getRecoverableSessions,
   removePendingSession,
   removeRecoverableSession,
+  updateRecoverableSessionSnapshot,
   updatePendingSession,
   upsertPendingSession,
   upsertRecoverableSession,
@@ -244,10 +245,6 @@ const MockInterviewPage = () => {
       .catch(() => setSpeechAvailable(false));
   }, [speechAppKey, speechAccessKey]);
 
-  useEffect(() => {
-    return () => abortRef.current?.abort();
-  }, []);
-
   const canStart = Boolean(selectedInterviewType && selectedCategory);
   const hasPendingLoadingView = Boolean(activePendingSession) && status !== "creating";
   const interviewStarted = Boolean(sessionId) && !(status === "creating" && messages.length === 0);
@@ -268,6 +265,7 @@ const MockInterviewPage = () => {
   const activeCreatingSteps = ragEnabled ? creatingSteps : creatingStepsWithoutRag;
   const currentRound = interviewState?.currentRound ?? 1;
   const turnCount = interviewState?.turnCount ?? 0;
+  const answeredCount = messages.filter((message) => message.role === "user" && message.content.trim().length > 0).length;
 
   const buildLocalSnapshot = useCallback(
     (
@@ -357,6 +355,19 @@ const MockInterviewPage = () => {
       persistSnapshot({ developerTrace: [...useMockInterviewStore.getState().developerTrace, trace] });
     },
     [appendDeveloperTrace, persistSnapshot]
+  );
+
+  const patchRecoverableSessionSnapshot = useCallback(
+    (
+      targetSessionId: string,
+      updater: (snapshot: MockInterviewSessionSnapshot) => MockInterviewSessionSnapshot
+    ) => {
+      updateRecoverableSessionSnapshot(targetSessionId, (snapshot) => ({
+        ...updater(snapshot),
+        lastActiveAt: new Date().toISOString(),
+      }));
+    },
+    []
   );
 
   const handleExportTranscript = useCallback(() => {
@@ -716,42 +727,106 @@ const MockInterviewPage = () => {
         runtimeConfig: getRuntimeConfig(),
         signal: abortRef.current.signal,
         onUserMessage: (payload) => {
+          patchRecoverableSessionSnapshot(nextSessionId, (snapshot) => ({
+            ...snapshot,
+            status: "streaming",
+            messages: [...snapshot.messages, payload],
+          }));
           if (isViewingTargetSession()) {
             appendUserMessage(payload);
           }
         },
         onAnswerAnalysisStarted: () => {
+          patchRecoverableSessionSnapshot(nextSessionId, (snapshot) => ({
+            ...snapshot,
+            status: "streaming",
+            pendingAssistantPhase: "analyzing_answer",
+            streamingMessageId: null,
+          }));
           if (isViewingTargetSession()) {
             startAnswerAnalysis();
           }
         },
         onMessageStart: ({ messageId }) => {
+          patchRecoverableSessionSnapshot(nextSessionId, (snapshot) => {
+            const exists = snapshot.messages.some((message) => message.id === messageId);
+            return {
+              ...snapshot,
+              status: "streaming",
+              pendingAssistantPhase: "idle",
+              streamingMessageId: messageId,
+              messages: exists
+                ? snapshot.messages
+                : [...snapshot.messages, { id: messageId, role: "assistant", content: "" }],
+            };
+          });
           if (isViewingTargetSession()) {
             clearPendingAssistantPhase();
             startAssistantMessage(messageId);
           }
         },
         onMessageDelta: ({ messageId, delta }) => {
+          patchRecoverableSessionSnapshot(nextSessionId, (snapshot) => ({
+            ...snapshot,
+            status: "streaming",
+            streamingMessageId: messageId,
+            messages: snapshot.messages.map((message) =>
+              message.id === messageId ? { ...message, content: `${message.content}${delta}` } : message
+            ),
+          }));
           if (isViewingTargetSession()) {
             applyAssistantDelta(messageId, delta);
           }
         },
         onMessageEnd: ({ messageId, content, interviewState: nextInterviewState }) => {
+          patchRecoverableSessionSnapshot(nextSessionId, (snapshot) => ({
+            ...snapshot,
+            status: nextInterviewState.closed ? "completed" : "ready",
+            interviewState: nextInterviewState,
+            pendingAssistantPhase: "idle",
+            streamingMessageId: null,
+            messages: snapshot.messages.map((message) =>
+              message.id === messageId ? { ...message, content } : message
+            ),
+          }));
           if (isViewingTargetSession()) {
             finishAssistantMessage({ messageId, content, interviewState: nextInterviewState });
           }
         },
         onReflection: (reflection) => {
+          patchRecoverableSessionSnapshot(nextSessionId, (snapshot) => ({
+            ...snapshot,
+            interviewState: {
+              ...snapshot.interviewState,
+              reflectionHistory: [...snapshot.interviewState.reflectionHistory, reflection],
+            },
+          }));
           if (isViewingTargetSession()) {
             appendReflection(reflection);
           }
         },
         onDeveloperTrace: (trace) => {
+          patchRecoverableSessionSnapshot(nextSessionId, (snapshot) => ({
+            ...snapshot,
+            developerTrace: [...snapshot.developerTrace, trace],
+          }));
           if (isViewingTargetSession()) {
             handleDeveloperTrace(trace);
           }
         },
         onRoundTransition: (transition) => {
+          patchRecoverableSessionSnapshot(nextSessionId, (snapshot) => ({
+            ...snapshot,
+            interviewState: {
+              ...snapshot.interviewState,
+              currentRound: transition.to_round,
+              questionsPerRound: {
+                ...snapshot.interviewState.questionsPerRound,
+                [String(transition.to_round)]:
+                  snapshot.interviewState.questionsPerRound[String(transition.to_round)] ?? 0,
+              },
+            },
+          }));
           if (!isViewingTargetSession()) {
             return;
           }
@@ -769,6 +844,13 @@ const MockInterviewPage = () => {
           });
         },
         onDone: ({ sessionId: doneSessionId, status: nextStatus, interviewState: nextInterviewState }) => {
+          patchRecoverableSessionSnapshot(doneSessionId, (snapshot) => ({
+            ...snapshot,
+            status: nextStatus,
+            interviewState: nextInterviewState,
+            pendingAssistantPhase: "idle",
+            streamingMessageId: null,
+          }));
           if (doneSessionId === justCreatedSessionRef.current) {
             justCreatedSessionRef.current = null;
           }
@@ -898,13 +980,14 @@ const MockInterviewPage = () => {
       if (!createdSession) {
         throw new Error("模拟面试会话未正确初始化");
       }
+      const activeCreatedSessionId = createdSessionId;
       const createdSessionData: MockInterviewSessionResponse = createdSession;
 
       abortRef.current?.abort();
       abortRef.current = new AbortController();
-      const isViewingCreatedSession = () => useMockInterviewStore.getState().sessionId === createdSessionId;
+      const isViewingCreatedSession = () => useMockInterviewStore.getState().sessionId === activeCreatedSessionId;
       await streamMockInterviewReply({
-        sessionId: createdSessionId,
+        sessionId: activeCreatedSessionId,
         mode: "start",
         interviewType: selectedInterviewType,
         category: selectedCategory,
@@ -918,17 +1001,40 @@ const MockInterviewPage = () => {
         runtimeConfig,
         signal: abortRef.current.signal,
         onUserMessage: (payload) => {
+          patchRecoverableSessionSnapshot(activeCreatedSessionId, (snapshot) => ({
+            ...snapshot,
+            status: "streaming",
+            messages: [...snapshot.messages, payload],
+          }));
           if (isViewingCreatedSession()) {
             appendUserMessage(payload);
           }
         },
         onAnswerAnalysisStarted: () => {
+          patchRecoverableSessionSnapshot(activeCreatedSessionId, (snapshot) => ({
+            ...snapshot,
+            status: "streaming",
+            pendingAssistantPhase: "analyzing_answer",
+            streamingMessageId: null,
+          }));
           if (isViewingCreatedSession()) {
             startAnswerAnalysis();
           }
         },
         onMessageStart: ({ messageId }) => {
           initialAssistantMessage = { id: messageId, content: "" };
+          patchRecoverableSessionSnapshot(activeCreatedSessionId, (snapshot) => {
+            const exists = snapshot.messages.some((message) => message.id === messageId);
+            return {
+              ...snapshot,
+              status: "streaming",
+              pendingAssistantPhase: "idle",
+              streamingMessageId: messageId,
+              messages: exists
+                ? snapshot.messages
+                : [...snapshot.messages, { id: messageId, role: "assistant", content: "" }],
+            };
+          });
           if (isViewingCreatedSession()) {
             clearPendingAssistantPhase();
             startAssistantMessage(messageId);
@@ -940,28 +1046,69 @@ const MockInterviewPage = () => {
           } else {
             initialAssistantMessage.content += delta;
           }
+          patchRecoverableSessionSnapshot(activeCreatedSessionId, (snapshot) => ({
+            ...snapshot,
+            status: "streaming",
+            streamingMessageId: messageId,
+            messages: snapshot.messages.map((message) =>
+              message.id === messageId ? { ...message, content: `${message.content}${delta}` } : message
+            ),
+          }));
           if (isViewingCreatedSession()) {
             applyAssistantDelta(messageId, delta);
           }
         },
         onMessageEnd: ({ messageId, content, interviewState: nextInterviewState }) => {
           initialAssistantMessage = { id: messageId, content };
+          patchRecoverableSessionSnapshot(activeCreatedSessionId, (snapshot) => ({
+            ...snapshot,
+            status: nextInterviewState.closed ? "completed" : "ready",
+            interviewState: nextInterviewState,
+            pendingAssistantPhase: "idle",
+            streamingMessageId: null,
+            messages: snapshot.messages.map((message) =>
+              message.id === messageId ? { ...message, content } : message
+            ),
+          }));
           if (isViewingCreatedSession()) {
             finishAssistantMessage({ messageId, content, interviewState: nextInterviewState });
           }
         },
         onReflection: (reflection) => {
+          patchRecoverableSessionSnapshot(activeCreatedSessionId, (snapshot) => ({
+            ...snapshot,
+            interviewState: {
+              ...snapshot.interviewState,
+              reflectionHistory: [...snapshot.interviewState.reflectionHistory, reflection],
+            },
+          }));
           if (isViewingCreatedSession()) {
             appendReflection(reflection);
           }
         },
         onDeveloperTrace: (trace) => {
           initialDeveloperTrace = [...initialDeveloperTrace, trace];
+          patchRecoverableSessionSnapshot(activeCreatedSessionId, (snapshot) => ({
+            ...snapshot,
+            developerTrace: [...snapshot.developerTrace, trace],
+          }));
           if (isViewingCreatedSession()) {
             handleDeveloperTrace(trace);
           }
         },
         onRoundTransition: (transition) => {
+          patchRecoverableSessionSnapshot(activeCreatedSessionId, (snapshot) => ({
+            ...snapshot,
+            interviewState: {
+              ...snapshot.interviewState,
+              currentRound: transition.to_round,
+              questionsPerRound: {
+                ...snapshot.interviewState.questionsPerRound,
+                [String(transition.to_round)]:
+                  snapshot.interviewState.questionsPerRound[String(transition.to_round)] ?? 0,
+              },
+            },
+          }));
           if (!isViewingCreatedSession()) {
             return;
           }
@@ -979,6 +1126,13 @@ const MockInterviewPage = () => {
           });
         },
         onDone: ({ sessionId: doneSessionId, status: nextStatus, interviewState: nextInterviewState }) => {
+          patchRecoverableSessionSnapshot(doneSessionId, (snapshot) => ({
+            ...snapshot,
+            status: nextStatus,
+            interviewState: nextInterviewState,
+            pendingAssistantPhase: "idle",
+            streamingMessageId: null,
+          }));
           if (doneSessionId === justCreatedSessionRef.current) {
             justCreatedSessionRef.current = null;
           }
@@ -1214,6 +1368,7 @@ const MockInterviewPage = () => {
                   messages={messages}
                   streamingMessageId={streamingMessageId}
                   pendingAssistantPhase={pendingAssistantPhase}
+                  status={status}
                 />
               )}
 
@@ -1235,7 +1390,7 @@ const MockInterviewPage = () => {
                 onMicToggle={speechSupported ? handleMicToggle : undefined}
                 footer={
                   <div className="flex items-center justify-between">
-                    <div className="text-xs text-muted-foreground">已回答 {turnCount} 次</div>
+                    <div className="text-xs text-muted-foreground">已回答 {Math.max(turnCount, answeredCount)} 次</div>
                     <Button variant="ghost" size="sm" onClick={() => setShowRestartConfirm(true)} className="gap-2">
                       <RotateCcw className="h-4 w-4" />
                       重新开始

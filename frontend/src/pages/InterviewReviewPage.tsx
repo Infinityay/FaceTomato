@@ -13,12 +13,17 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import {
-  fetchInterviewReviewSessionById,
+  clearStaleInterviewReviewGeneration,
   fetchInterviewReviewSessions,
   generateInterviewReviewReport,
+  getInterviewReviewGenerationProgress,
+  getInterviewReviewGenerationPromise,
+  getInterviewReviewTopicCount,
   getInterviewReviewSessionDetailSnapshot,
   getInterviewReviewSessionsSnapshot,
+  isInterviewReviewReportGenerating,
   optimizeInterviewReviewTopic,
+  type InterviewReviewGenerationProgress,
 } from "../lib/interviewReviewApi";
 import { getRecoverableSessionById } from "../lib/mockInterviewRecovery";
 import type {
@@ -156,6 +161,27 @@ const isReviewEligibleSessionId = (sessionId: string) => {
   return snapshot.status === "completed" || snapshot.interviewState.closed === true;
 };
 
+const formatGenerationProgressMessage = (
+  progress: InterviewReviewGenerationProgress | null,
+  totalTopics: number
+) => {
+  if (!progress) {
+    return totalTopics > 0 ? `正在准备 ${totalTopics} 个 Topic 的评估任务...` : "正在准备 Topic 评估任务...";
+  }
+
+  if (progress.status === "starting") {
+    return progress.totalTopics > 0
+      ? `正在准备 ${progress.totalTopics} 个 Topic 的评估任务...`
+      : "正在准备 Topic 评估任务...";
+  }
+
+  if (progress.topicName) {
+    return `已完成第 ${progress.currentTopic} 个 Topic：${progress.topicName}`;
+  }
+
+  return `已完成 ${progress.currentTopic}/${progress.totalTopics} 个 Topic`;
+};
+
 const InterviewReviewPage = () => {
   const runtimeConfig = useRuntimeSettingsStore();
   const [sessions, setSessions] = useState<ReviewSessionListItem[]>(() => getInterviewReviewSessionsSnapshot());
@@ -165,6 +191,7 @@ const InterviewReviewPage = () => {
     Object.fromEntries(getInterviewReviewSessionsSnapshot().map((session) => [session.id, session.reportStatus]))
   );
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [generationProgress, setGenerationProgress] = useState<InterviewReviewGenerationProgress | null>(null);
   const [optimizationDraft, setOptimizationDraft] = useState("");
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [chatMessages, setChatMessages] = useState<ReviewChatMessage[]>([]);
@@ -202,19 +229,96 @@ const InterviewReviewPage = () => {
     setProblemsExpanded(false);
   }, [selectedTopicId]);
 
+  useEffect(() => {
+    if (!selectedSession || !isGeneratingReport) {
+      return;
+    }
+
+    const sessionId = selectedSession.id;
+    const timer = window.setInterval(() => {
+      setGenerationProgress(getInterviewReviewGenerationProgress(sessionId));
+    }, 250);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [isGeneratingReport, selectedSession?.id]);
+
+  useEffect(() => {
+    if (!selectedSession) {
+      setIsGeneratingReport(false);
+      setGenerationProgress(null);
+      return;
+    }
+
+    const sessionId = selectedSession.id;
+    const pending = isInterviewReviewReportGenerating(sessionId);
+    if (!pending) {
+      setIsGeneratingReport(false);
+      setGenerationProgress(null);
+      return;
+    }
+
+    setIsGeneratingReport(true);
+    setGenerationProgress(getInterviewReviewGenerationProgress(sessionId));
+    const inFlight = getInterviewReviewGenerationPromise(sessionId);
+    if (!inFlight) {
+      const cleared = clearStaleInterviewReviewGeneration(sessionId);
+      if (cleared) {
+        setIsGeneratingReport(false);
+        setGenerationProgress(null);
+        setOptimizationError("上一次复盘生成已中断，请重新点击“生成报告”。");
+      }
+      return;
+    }
+
+    let alive = true;
+    void inFlight
+      .then((result) => {
+        if (!alive) return;
+        setReportStatuses((current) => ({ ...current, [result.sessionId]: result.reportStatus }));
+        const detail = result.detail ?? getInterviewReviewSessionDetailSnapshot(sessionId);
+        if (!detail) return;
+        setSelectedSession(detail);
+        setSelectedTopicId((current) => current ?? getDefaultTopicId(detail));
+      })
+      .catch((error) => {
+        if (!alive) return;
+        setOptimizationError(error instanceof Error ? error.message : "Failed to generate interview review report.");
+      })
+      .finally(() => {
+        if (!alive) return;
+        setIsGeneratingReport(false);
+        setGenerationProgress(null);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [selectedSession?.id]);
+
   const interviewRecords = useMemo(() => sessions.map((session) => ({ ...session, status: reportStatuses[session.id] ?? session.reportStatus })), [reportStatuses, sessions]);
+  const selectedSessionTopicCount = useMemo(
+    () => (selectedSession ? getInterviewReviewTopicCount(selectedSession.id, selectedSession) : 0),
+    [selectedSession]
+  );
 
   const triggerReportGeneration = async (sessionId: string) => {
     setIsGeneratingReport(true);
+    setGenerationProgress(null);
     console.info("[interview-review] trigger generation", {
       sessionId,
       runtimeApiKeyConfigured: Boolean(runtimeConfig.apiKey?.trim()),
       runtimeBaseUrlConfigured: Boolean(runtimeConfig.baseURL?.trim()),
       runtimeModelConfigured: Boolean(runtimeConfig.model?.trim()),
     });
-    const result = await generateInterviewReviewReport(sessionId, runtimeConfig);
+    const result = await generateInterviewReviewReport(sessionId, runtimeConfig, {
+      onProgress: (progress) => {
+        setGenerationProgress(progress);
+      },
+    });
     setReportStatuses((current) => ({ ...current, [result.sessionId]: result.reportStatus }));
-    const detail = await fetchInterviewReviewSessionById(sessionId);
+    const detail = result.detail ?? getInterviewReviewSessionDetailSnapshot(sessionId);
     if (detail) {
       console.info("[interview-review] detail loaded after generation", {
         sessionId,
@@ -223,7 +327,11 @@ const InterviewReviewPage = () => {
       });
       setSelectedSession(detail);
       setSelectedTopicId((current) => current ?? getDefaultTopicId(detail));
+      setGenerationProgress(null);
+      return;
     }
+
+    setOptimizationError("未能保存复盘结果，请重试。");
   };
 
   const handleOpenRecord = (sessionId: string) => {
@@ -232,33 +340,24 @@ const InterviewReviewPage = () => {
     setChatMessages([]);
     const detail = getInterviewReviewSessionDetailSnapshot(sessionId);
     const reviewEligible = isReviewEligibleSessionId(sessionId);
+    const generating = isInterviewReviewReportGenerating(sessionId);
     console.info("[interview-review] open record", {
       sessionId,
       localDetailFound: Boolean(detail),
       localReportStatus: detail?.reportStatus ?? null,
       localTopicCount: detail?.topics.length ?? 0,
       reviewEligible,
+      generating,
     });
     setSelectedSession(detail);
     setSelectedTopicId(getDefaultTopicId(detail));
+    setIsGeneratingReport(generating);
+    setGenerationProgress(generating ? getInterviewReviewGenerationProgress(sessionId) : null);
 
     if (!reviewEligible) {
       setOptimizationError("请先完成模拟面试后再生成复盘报告");
       return;
     }
-
-    if ((reportStatuses[sessionId] ?? detail?.reportStatus) !== "ready") {
-      void triggerReportGeneration(sessionId)
-        .catch((error) => setOptimizationError(error instanceof Error ? error.message : "Failed to generate interview review report."))
-        .finally(() => setIsGeneratingReport(false));
-      return;
-    }
-
-    void fetchInterviewReviewSessionById(sessionId).then((data) => {
-      if (!data || data.id !== sessionId) return;
-      setSelectedSession(data);
-      setSelectedTopicId((current) => current ?? getDefaultTopicId(data));
-    });
   };
 
   const handleBackToList = () => {
@@ -267,6 +366,7 @@ const InterviewReviewPage = () => {
     setOptimizationDraft("");
     setOptimizationError(null);
     setIsGeneratingReport(false);
+    setGenerationProgress(null);
   };
 
   const handleGenerateReport = () => {
@@ -291,6 +391,7 @@ const InterviewReviewPage = () => {
         sessionId: selectedSession.id,
         topicId: selectedTopic.id,
         message: userMessage,
+        topic: selectedTopic,
         conversation: topicChatMessages,
         runtimeConfig,
       });
@@ -358,13 +459,13 @@ const InterviewReviewPage = () => {
         <div className="space-y-6">
           <div className="flex items-center gap-3">
             <Button type="button" variant="ghost" className="h-9 rounded-full border border-border/70 px-4 text-muted-foreground hover:bg-sidebar/35" onClick={handleBackToList}><ArrowLeft className="mr-2 h-4 w-4" />返回记录列表</Button>
-            <Button type="button" variant="outline" className="rounded-2xl" onClick={handleGenerateReport} disabled={isGeneratingReport}>重新生成</Button>
+            <Button type="button" variant="outline" className="rounded-2xl" onClick={handleGenerateReport} disabled={isGeneratingReport}>{selectedSession.reportStatus === "ready" ? "重新生成" : "生成报告"}</Button>
           </div>
 
           <Card className="rounded-3xl border border-border/70 shadow-sm">
             <CardHeader><div className="flex items-center justify-between"><CardTitle>面试总览</CardTitle>{selectedSession.reportStatus === "ready" ? <Badge className="rounded-full bg-primary px-3 py-1 text-sm font-semibold text-primary-foreground">总体评分 {selectedSession.overallScore}</Badge> : <Badge variant="outline">待生成</Badge>}</div></CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-3">{[{ label: "岗位方向", value: selectedSession.role }, { label: "面试时间", value: selectedSession.interviewAt }, { label: "Topic 数量", value: String(selectedSession.topics.length) }].map((item) => <div key={item.label} className="space-y-2 rounded-2xl bg-sidebar/35 px-4 py-4"><p className="text-xs text-muted-foreground">{item.label}</p><p className="text-lg font-semibold text-foreground">{item.value}</p></div>)}</div>
+              <div className="grid gap-4 md:grid-cols-3">{[{ label: "岗位方向", value: selectedSession.role }, { label: "面试时间", value: selectedSession.interviewAt }, { label: "Topic 数量", value: String(selectedSessionTopicCount) }].map((item) => <div key={item.label} className="space-y-2 rounded-2xl bg-sidebar/35 px-4 py-4"><p className="text-xs text-muted-foreground">{item.label}</p><p className="text-lg font-semibold text-foreground">{item.value}</p></div>)}</div>
               <div className="rounded-2xl border border-border/60 bg-background px-4 py-4"><p className="mb-2 text-xs text-muted-foreground">评价</p><p className="text-sm leading-7 text-foreground">{selectedSession.summary}</p></div>
               {optimizationError ? <div className="rounded-2xl border border-rose-500/20 bg-rose-500/5 px-4 py-4 text-sm leading-6 text-rose-600 dark:text-rose-300">{optimizationError}</div> : null}
             </CardContent>
@@ -372,9 +473,44 @@ const InterviewReviewPage = () => {
 
           <AnimatePresence mode="wait">
             {isGeneratingReport ? (
-              <motion.div key="generating" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}><Card className="rounded-3xl border border-border/70 shadow-sm"><CardContent className="flex min-h-[320px] flex-col items-center justify-center gap-4 p-8 text-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /><div><h2 className="text-xl font-semibold text-foreground">正在生成面试复盘</h2><p className="text-sm text-muted-foreground">正在调用 LLM 分析面试记录并生成结构化复盘，请稍候。</p></div></CardContent></Card></motion.div>
+              <motion.div key="generating" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+                <Card className="rounded-3xl border border-border/70 shadow-sm">
+                  <CardContent className="flex min-h-[320px] flex-col items-center justify-center gap-5 p-8 text-center">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                    <div>
+                      <h2 className="text-xl font-semibold text-foreground">正在生成面试复盘</h2>
+                      <p className="text-sm text-muted-foreground">正在调用 LLM 分析面试记录并生成结构化复盘，请稍候。</p>
+                    </div>
+                    <div className="w-full max-w-md rounded-3xl border border-border/70 bg-sidebar/25 px-5 py-4 text-left">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-medium text-foreground">生成进度</p>
+                        <p className="text-sm font-semibold text-primary">
+                          {generationProgress
+                            ? `${generationProgress.currentTopic}/${generationProgress.totalTopics}`
+                            : `0/${selectedSessionTopicCount}`}
+                        </p>
+                      </div>
+                      <div className="mt-3 h-2 overflow-hidden rounded-full bg-border/60">
+                        <div
+                          className="h-full rounded-full bg-primary transition-all duration-300"
+                          style={{
+                            width: `${
+                              generationProgress?.totalTopics
+                                ? (generationProgress.currentTopic / generationProgress.totalTopics) * 100
+                                : 0
+                            }%`,
+                          }}
+                        />
+                      </div>
+                      <p className="mt-3 text-sm text-muted-foreground">
+                        {formatGenerationProgressMessage(generationProgress, selectedSessionTopicCount)}
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              </motion.div>
             ) : selectedSession.topics.length === 0 ? (
-              <motion.div key="empty" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}><Card className="rounded-3xl border border-dashed border-border/70 shadow-sm"><CardContent className="flex min-h-[320px] flex-col items-center justify-center gap-4 p-8 text-center"><Sparkles className="h-8 w-8 text-primary" /><div><h2 className="text-xl font-semibold text-foreground">尚未生成 LLM 复盘评价</h2><p className="text-sm text-muted-foreground">点击“查看复盘”后会自动生成。若失败，可点击“重新生成”。</p></div></CardContent></Card></motion.div>
+              <motion.div key="empty" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}><Card className="rounded-3xl border border-dashed border-border/70 shadow-sm"><CardContent className="flex min-h-[320px] flex-col items-center justify-center gap-4 p-8 text-center"><Sparkles className="h-8 w-8 text-primary" /><div><h2 className="text-xl font-semibold text-foreground">尚未生成 LLM 复盘评价</h2><p className="text-sm text-muted-foreground">点击“生成报告”后会调用后端生成复盘，并把结果保存在当前浏览器的本地记录中。</p></div></CardContent></Card></motion.div>
             ) : (
               <motion.div key="topics" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="space-y-5 pt-2">
                 {selectedSession.topics.map((topic) => {

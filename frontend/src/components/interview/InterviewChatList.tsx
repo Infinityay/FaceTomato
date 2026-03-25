@@ -1,14 +1,24 @@
 import { memo, useEffect, useRef } from "react";
 import { InterviewMessageItem } from "./InterviewMessageItem";
-import type { MockInterviewMessage, PendingAssistantPhase } from "@/types/mockInterview";
+import type {
+  MockInterviewMessage,
+  MockInterviewStatus,
+  PendingAssistantPhase,
+} from "@/types/mockInterview";
 
 interface InterviewChatListProps {
   messages: MockInterviewMessage[];
   streamingMessageId: string | null;
   pendingAssistantPhase: PendingAssistantPhase;
+  status?: MockInterviewStatus;
 }
 
-function InterviewChatListComponent({ messages, streamingMessageId, pendingAssistantPhase }: InterviewChatListProps) {
+function InterviewChatListComponent({
+  messages,
+  streamingMessageId,
+  pendingAssistantPhase,
+  status = "idle",
+}: InterviewChatListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -20,6 +30,18 @@ function InterviewChatListComponent({ messages, streamingMessageId, pendingAssis
     }
   }, [messages]);
 
+  const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+  const hasStreamingMessage = Boolean(
+    streamingMessageId && messages.some((message) => message.id === streamingMessageId)
+  );
+  const showAnalyzingPlaceholder =
+    pendingAssistantPhase === "analyzing_answer" ||
+    (status === "streaming" && !streamingMessageId && lastMessage?.role === "user");
+  const showTypingPlaceholder =
+    status === "streaming" &&
+    Boolean(streamingMessageId) &&
+    !hasStreamingMessage;
+
   return (
     <div ref={containerRef} className="flex-1 overflow-y-auto px-4 py-4 md:px-6">
       <div className="mx-auto w-full max-w-5xl space-y-5">
@@ -30,9 +52,15 @@ function InterviewChatListComponent({ messages, streamingMessageId, pendingAssis
             isStreaming={streamingMessageId === message.id}
           />
         ))}
-        {pendingAssistantPhase === "analyzing_answer" && !streamingMessageId ? (
+        {showAnalyzingPlaceholder ? (
           <InterviewMessageItem
             message={{ id: "pending-assistant-phase", role: "assistant", content: "正在分析你的回答" }}
+          />
+        ) : null}
+        {showTypingPlaceholder ? (
+          <InterviewMessageItem
+            message={{ id: "pending-streaming-message", role: "assistant", content: "" }}
+            isStreaming
           />
         ) : null}
       </div>

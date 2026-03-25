@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { produce } from "immer";
+import { isMockInterviewReplyStreaming } from "@/lib/mockInterviewApi";
 import type {
   MockInterviewCreatingStep,
   MockInterviewDeveloperContext,
@@ -143,12 +144,15 @@ export const useMockInterviewStore = create<MockInterviewStore>()(
 
       restoreSessionFromSnapshot: ({ snapshot }) =>
         set(() => {
+          const hasActiveStream = snapshot.status === "streaming" && isMockInterviewReplyStreaming(snapshot.sessionId);
           const lastMessage = snapshot.messages[snapshot.messages.length - 1];
           const previousMessage = snapshot.messages[snapshot.messages.length - 2];
           const recoveringInterruptedReply =
             snapshot.status === "streaming" &&
+            !hasActiveStream &&
             (lastMessage?.role === "user" || (lastMessage?.role === "assistant" && previousMessage?.role === "user"));
-          const recoveringInterruptedAssistant = snapshot.status === "streaming" && lastMessage?.role === "assistant";
+          const recoveringInterruptedAssistant =
+            snapshot.status === "streaming" && !hasActiveStream && lastMessage?.role === "assistant";
           const restoredMessages = recoveringInterruptedReply
             ? snapshot.messages.slice(0, lastMessage?.role === "assistant" ? -2 : -1)
             : recoveringInterruptedAssistant
@@ -170,17 +174,19 @@ export const useMockInterviewStore = create<MockInterviewStore>()(
             status:
               snapshot.status === "expired"
                 ? "error"
+                : hasActiveStream
+                  ? "streaming"
                 : snapshot.status === "completed"
                   ? "completed"
                   : "ready",
-            messages: restoredMessages,
-            streamingMessageId: null,
-            pendingAssistantPhase: "idle",
+            messages: hasActiveStream ? snapshot.messages : restoredMessages,
+            streamingMessageId: hasActiveStream ? snapshot.streamingMessageId ?? null : null,
+            pendingAssistantPhase: hasActiveStream ? snapshot.pendingAssistantPhase ?? "idle" : "idle",
             selectedInterviewType: snapshot.interviewType,
             selectedCategory: snapshot.category,
             limits: snapshot.limits,
             interviewPlan: snapshot.interviewPlan,
-            interviewState: restoredInterviewState,
+            interviewState: hasActiveStream ? snapshot.interviewState : restoredInterviewState,
             retrieval: snapshot.retrieval,
             developerContext: snapshot.developerContext,
             developerTrace: snapshot.developerTrace,

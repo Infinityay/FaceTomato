@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
-import time
 from functools import lru_cache
 
 from langchain.chat_models import init_chat_model
@@ -28,6 +28,7 @@ from app.utils.structured_output import invoke_with_fallback
 
 
 logger = logging.getLogger(__name__)
+MAX_TOPIC_EVALUATION_CONCURRENCY = 3
 
 
 class InterviewEvaluationAgent:
@@ -124,29 +125,9 @@ class InterviewEvaluationAgent:
     def evaluate(
         self, payload: InterviewEvaluationAgentInput
     ) -> InterviewEvaluationReport:
-        start = time.perf_counter()
-        logger.info(
-            "interview evaluation started",
-            extra={
-                "session_id": payload.sessionId,
-                "round_number": payload.interviewState.currentRound,
-                "message_count": len(payload.messages),
-            },
-        )
         try:
             topic_inputs = self._build_topic_inputs(payload)
-            logger.info(
-                "interview evaluation built topic inputs",
-                extra={
-                    "session_id": payload.sessionId,
-                    "round_number": payload.interviewState.currentRound,
-                    "message_count": len(payload.messages),
-                    "topic_input_count": len(topic_inputs),
-                },
-            )
-            topic_assessments = [
-                self._evaluate_topic(topic_input) for topic_input in topic_inputs
-            ]
+            topic_assessments = self._evaluate_topics(topic_inputs)
             summary_input = InterviewSummaryEvaluationInput(
                 sessionId=payload.sessionId,
                 jdText=payload.jdText,
@@ -155,15 +136,6 @@ class InterviewEvaluationAgent:
                 topicAssessments=topic_assessments,
             )
             summary = self._evaluate_summary(summary_input)
-            logger.info(
-                "interview evaluation built summary",
-                extra={
-                    "session_id": payload.sessionId,
-                    "topic_assessment_count": len(topic_assessments),
-                    "overall_score": summary.overallScore,
-                    "elapsed_ms": round((time.perf_counter() - start) * 1000),
-                },
-            )
             return InterviewEvaluationReport(
                 summary=summary.summary,
                 overallScore=summary.overallScore,
@@ -177,14 +149,69 @@ class InterviewEvaluationAgent:
             logger.exception(
                 "Interview evaluation failed for session %s, using fallback report",
                 payload.sessionId,
-                extra={
-                    "session_id": payload.sessionId,
-                    "round_number": payload.interviewState.currentRound,
-                    "message_count": len(payload.messages),
-                    "elapsed_ms": round((time.perf_counter() - start) * 1000),
-                },
             )
             return self._build_fallback_report(payload)
+
+    def evaluate_with_progress(self, payload: InterviewEvaluationAgentInput):
+        """Yield progress updates while building the final interview evaluation report."""
+        try:
+            topic_inputs = self._build_topic_inputs(payload)
+            total_topics = len(topic_inputs)
+            yield {
+                "type": "start",
+                "sessionId": payload.sessionId,
+                "totalTopics": total_topics,
+            }
+
+            topic_assessments: list[EvaluationTopicAssessment | None] = [None] * total_topics
+            completed_topics = 0
+            for topic_index, assessment in self._evaluate_topics_with_progress(topic_inputs):
+                topic_assessments[topic_index] = assessment
+                completed_topics += 1
+                topic_input = topic_inputs[topic_index]
+                yield {
+                    "type": "topic_complete",
+                    "sessionId": payload.sessionId,
+                    "currentTopic": completed_topics,
+                    "totalTopics": total_topics,
+                    "topicName": assessment.topic or topic_input.topic,
+                    "topicIndex": topic_index + 1,
+                }
+
+            finalized_assessments = [
+                assessment for assessment in topic_assessments if assessment is not None
+            ]
+            summary_input = InterviewSummaryEvaluationInput(
+                sessionId=payload.sessionId,
+                jdText=payload.jdText,
+                jdData=payload.jdData,
+                resumeSnapshot=payload.resumeSnapshot,
+                topicAssessments=finalized_assessments,
+            )
+            summary = self._evaluate_summary(summary_input)
+            yield {
+                "type": "done",
+                "sessionId": payload.sessionId,
+                "report": InterviewEvaluationReport(
+                    summary=summary.summary,
+                    overallScore=summary.overallScore,
+                    recommendation=summary.recommendation,
+                    strengths=summary.strengths,
+                    risks=summary.risks,
+                    priorityActions=summary.priorityActions,
+                    topicAssessments=finalized_assessments,
+                ),
+            }
+        except Exception:
+            logger.exception(
+                "Interview evaluation failed for session %s, using fallback report",
+                payload.sessionId,
+            )
+            yield {
+                "type": "done",
+                "sessionId": payload.sessionId,
+                "report": self._build_fallback_report(payload),
+            }
 
     def _build_topic_inputs(
         self, payload: InterviewEvaluationAgentInput
@@ -194,27 +221,21 @@ class InterviewEvaluationAgent:
             len(payload.interviewPlan.plan),
         )
         plan_items = payload.interviewPlan.plan[:max_started_round]
-        transcript = list(payload.messages)
-        current_index = 0
+        transcript_buckets = self._split_messages_by_round(payload, plan_items)
         topic_inputs: list[InterviewTopicEvaluationInput] = []
 
-        for round_item in plan_items:
-            topic_messages: list = []
-            question = ""
-
-            while current_index < len(transcript):
-                message = transcript[current_index]
-                current_index += 1
-                if message.role == "assistant":
-                    if not question:
-                        question = message.content
-                        topic_messages.append(message)
-                    elif topic_messages:
-                        current_index -= 1
-                        break
-                elif message.role == "user":
-                    topic_messages.append(message)
-
+        for round_index, round_item in enumerate(plan_items):
+            topic_messages = (
+                transcript_buckets[round_index] if round_index < len(transcript_buckets) else []
+            )
+            question = next(
+                (
+                    message.content
+                    for message in topic_messages
+                    if message.role == "assistant" and message.content.strip()
+                ),
+                round_item.description,
+            )
             topic_inputs.append(
                 InterviewTopicEvaluationInput(
                     sessionId=payload.sessionId,
@@ -231,19 +252,99 @@ class InterviewEvaluationAgent:
 
         return topic_inputs
 
+    def _split_messages_by_round(
+        self,
+        payload: InterviewEvaluationAgentInput,
+        plan_items: list,
+    ) -> list[list]:
+        buckets: list[list] = [[] for _ in plan_items]
+        if not buckets:
+            return buckets
+
+        transcript = list(payload.messages)
+        pointer = 0
+
+        for round_index, _round_item in enumerate(plan_items):
+            round_number = round_index + 1
+            questions_left = max(
+                0,
+                payload.interviewState.questionsPerRound.get(str(round_number), 0),
+            )
+
+            while pointer < len(transcript) and questions_left > 0:
+                message = transcript[pointer]
+                pointer += 1
+
+                if message.role == "assistant":
+                    buckets[round_index].append(message)
+                    questions_left -= 1
+
+                    while pointer < len(transcript) and transcript[pointer].role != "assistant":
+                        buckets[round_index].append(transcript[pointer])
+                        pointer += 1
+                else:
+                    buckets[round_index].append(message)
+
+        current_round_index = min(
+            max(payload.interviewState.currentRound - 1, 0),
+            len(buckets) - 1,
+        )
+        while pointer < len(transcript):
+            buckets[current_round_index].append(transcript[pointer])
+            pointer += 1
+
+        return buckets
+
+    def _max_topic_concurrency(self, topic_count: int) -> int:
+        settings = get_settings()
+        return max(
+            1,
+            min(
+                topic_count,
+                MAX_TOPIC_EVALUATION_CONCURRENCY,
+                max(settings.rate_limit_max_bucket_size, 1),
+            ),
+        )
+
+    def _evaluate_topics(
+        self, topic_inputs: list[InterviewTopicEvaluationInput]
+    ) -> list[EvaluationTopicAssessment]:
+        if len(topic_inputs) <= 1:
+            return [self._evaluate_topic(topic_input) for topic_input in topic_inputs]
+
+        results: list[EvaluationTopicAssessment | None] = [None] * len(topic_inputs)
+        max_workers = self._max_topic_concurrency(len(topic_inputs))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self._evaluate_topic, topic_input): index
+                for index, topic_input in enumerate(topic_inputs)
+            }
+            for future in as_completed(futures):
+                index = futures[future]
+                results[index] = future.result()
+
+        return [result for result in results if result is not None]
+
+    def _evaluate_topics_with_progress(
+        self, topic_inputs: list[InterviewTopicEvaluationInput]
+    ):
+        if len(topic_inputs) <= 1:
+            for index, topic_input in enumerate(topic_inputs):
+                yield index, self._evaluate_topic(topic_input)
+            return
+
+        max_workers = self._max_topic_concurrency(len(topic_inputs))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self._evaluate_topic, topic_input): index
+                for index, topic_input in enumerate(topic_inputs)
+            }
+            for future in as_completed(futures):
+                yield futures[future], future.result()
+
     def _evaluate_topic(
         self, payload: InterviewTopicEvaluationInput
     ) -> EvaluationTopicAssessment:
-        start = time.perf_counter()
-        logger.info(
-            "interview topic evaluation started",
-            extra={
-                "session_id": payload.sessionId,
-                "round_number": payload.roundNumber,
-                "topic": payload.topic,
-                "message_count": len(payload.transcript),
-            },
-        )
         messages = self._build_topic_messages(payload)
         try:
             result = invoke_with_fallback(
@@ -251,45 +352,18 @@ class InterviewEvaluationAgent:
                 messages,
                 EvaluationTopicAssessment,
             )
-            assessment = result or self._build_fallback_topic_assessment(payload)
-            logger.info(
-                "interview topic evaluation completed",
-                extra={
-                    "session_id": payload.sessionId,
-                    "round_number": payload.roundNumber,
-                    "topic": assessment.topic,
-                    "message_count": len(payload.transcript),
-                    "overall_score": assessment.overallScore,
-                    "elapsed_ms": round((time.perf_counter() - start) * 1000),
-                },
-            )
-            return assessment
+            return result or self._build_fallback_topic_assessment(payload)
         except Exception:
             logger.exception(
                 "Topic evaluation failed for session %s round %s, using fallback topic assessment",
                 payload.sessionId,
                 payload.roundNumber,
-                extra={
-                    "session_id": payload.sessionId,
-                    "round_number": payload.roundNumber,
-                    "topic": payload.topic,
-                    "transcript_message_count": len(payload.transcript),
-                    "elapsed_ms": round((time.perf_counter() - start) * 1000),
-                },
             )
             return self._build_fallback_topic_assessment(payload)
 
     def _evaluate_summary(
         self, payload: InterviewSummaryEvaluationInput
     ) -> InterviewEvaluationSummary:
-        start = time.perf_counter()
-        logger.info(
-            "interview summary evaluation started",
-            extra={
-                "session_id": payload.sessionId,
-                "topic_assessment_count": len(payload.topicAssessments),
-            },
-        )
         messages = self._build_summary_messages(payload)
         try:
             result = invoke_with_fallback(
@@ -297,26 +371,11 @@ class InterviewEvaluationAgent:
                 messages,
                 InterviewEvaluationSummary,
             )
-            summary = result or self._build_fallback_summary(payload)
-            logger.info(
-                "interview summary evaluation completed",
-                extra={
-                    "session_id": payload.sessionId,
-                    "topic_assessment_count": len(payload.topicAssessments),
-                    "overall_score": summary.overallScore,
-                    "elapsed_ms": round((time.perf_counter() - start) * 1000),
-                },
-            )
-            return summary
+            return result or self._build_fallback_summary(payload)
         except Exception:
             logger.exception(
                 "Summary evaluation failed for session %s, using fallback summary",
                 payload.sessionId,
-                extra={
-                    "session_id": payload.sessionId,
-                    "topic_assessment_count": len(payload.topicAssessments),
-                    "elapsed_ms": round((time.perf_counter() - start) * 1000),
-                },
             )
             return self._build_fallback_summary(payload)
 

@@ -18,10 +18,22 @@ import type {
 
 const REPORT_STORAGE_KEY = "face-tomato-interview-review-reports-v2";
 const CONVERSATION_STORAGE_KEY = "face-tomato-interview-review-conversations-v2";
+const GENERATING_STORAGE_KEY = "face-tomato-interview-review-generating-v1";
+const GENERATING_PROGRESS_STORAGE_KEY = "face-tomato-interview-review-generating-progress-v1";
 
 type StoredReports = Record<string, ReviewSessionDetail>;
 type StoredConversations = Record<string, ReviewConversationMessage[]>;
-type ReviewSessionListResponse = { items: ReviewSessionListItem[] };
+type StoredGeneratingSessions = string[];
+export type InterviewReviewGenerationProgress = {
+  sessionId: string;
+  totalTopics: number;
+  currentTopic: number;
+  topicName: string;
+  status: "starting" | "running";
+};
+type StoredGeneratingProgress = Record<string, InterviewReviewGenerationProgress>;
+
+const inFlightReviewGenerations = new Map<string, Promise<ReviewGenerateReportResponse>>();
 
 const assessmentFocusFallbackMap: Record<string, string> = {
   structured_thinking: "考察候选人是否有结构化拆解复杂问题的能力",
@@ -89,6 +101,51 @@ function writeStoredConversations(conversations: StoredConversations) {
   localStorage.setItem(CONVERSATION_STORAGE_KEY, JSON.stringify(conversations));
 }
 
+function readGeneratingProgress(): StoredGeneratingProgress {
+  return safeParse<StoredGeneratingProgress>(GENERATING_PROGRESS_STORAGE_KEY, {});
+}
+
+function writeGeneratingProgress(progress: StoredGeneratingProgress) {
+  localStorage.setItem(GENERATING_PROGRESS_STORAGE_KEY, JSON.stringify(progress));
+}
+
+function readGeneratingSessions(): StoredGeneratingSessions {
+  return safeParse<StoredGeneratingSessions>(GENERATING_STORAGE_KEY, []);
+}
+
+function writeGeneratingSessions(sessionIds: StoredGeneratingSessions) {
+  localStorage.setItem(GENERATING_STORAGE_KEY, JSON.stringify([...new Set(sessionIds)]));
+}
+
+function markGeneratingSession(sessionId: string) {
+  writeGeneratingSessions([...readGeneratingSessions(), sessionId]);
+}
+
+function unmarkGeneratingSession(sessionId: string) {
+  writeGeneratingSessions(readGeneratingSessions().filter((id) => id !== sessionId));
+  const progress = readGeneratingProgress();
+  if (progress[sessionId]) {
+    delete progress[sessionId];
+    writeGeneratingProgress(progress);
+  }
+}
+
+export function isInterviewReviewReportGenerating(sessionId: string): boolean {
+  return inFlightReviewGenerations.has(sessionId) || readGeneratingSessions().includes(sessionId);
+}
+
+export function getInterviewReviewGenerationPromise(
+  sessionId: string
+): Promise<ReviewGenerateReportResponse> | null {
+  return inFlightReviewGenerations.get(sessionId) ?? null;
+}
+
+export function getInterviewReviewGenerationProgress(
+  sessionId: string
+): InterviewReviewGenerationProgress | null {
+  return readGeneratingProgress()[sessionId] ?? null;
+}
+
 async function parseErrorMessage(response: Response): Promise<string> {
   try {
     const payload = (await response.json()) as {
@@ -132,6 +189,10 @@ function getSnapshotRole(snapshot: MockInterviewSessionSnapshot): string {
 
 function buildPendingListItem(record: RecoverableSessionRecord, stored?: ReviewSessionDetail): ReviewSessionListItem {
   if (stored) {
+    const topicCount =
+      stored.reportStatus === "ready"
+        ? stored.topics.length
+        : record.snapshot.interviewPlan.plan.length;
     return {
       id: stored.id,
       title: stored.title,
@@ -140,7 +201,7 @@ function buildPendingListItem(record: RecoverableSessionRecord, stored?: ReviewS
       interviewAt: stored.interviewAt,
       reportStatus: stored.reportStatus,
       overallScore: stored.reportStatus === "ready" ? stored.overallScore : null,
-      topicCount: stored.topics.length,
+      topicCount,
     };
   }
 
@@ -178,20 +239,6 @@ function buildPendingDetail(snapshot: MockInterviewSessionSnapshot): ReviewSessi
   };
 }
 
-function mergeSessionLists(
-  localItems: ReviewSessionListItem[],
-  remoteItems: ReviewSessionListItem[]
-): ReviewSessionListItem[] {
-  const merged = new Map<string, ReviewSessionListItem>();
-  for (const item of localItems) {
-    merged.set(item.id, item);
-  }
-  for (const item of remoteItems) {
-    merged.set(item.id, item);
-  }
-  return [...merged.values()].sort((a, b) => b.interviewAt.localeCompare(a.interviewAt));
-}
-
 function isReviewEligibleSnapshot(snapshot: MockInterviewSessionSnapshot): boolean {
   return snapshot.status === "completed" || snapshot.interviewState.closed === true;
 }
@@ -203,6 +250,43 @@ function getReviewEligibleSessionRecords(): RecoverableSessionRecord[] {
 function getSnapshotBySessionId(sessionId: string): MockInterviewSessionSnapshot | null {
   const snapshot = getRecoverableSessionById(sessionId)?.snapshot ?? null;
   return snapshot && isReviewEligibleSnapshot(snapshot) ? snapshot : null;
+}
+
+export function clearStaleInterviewReviewGeneration(sessionId: string): boolean {
+  if (inFlightReviewGenerations.has(sessionId)) {
+    return false;
+  }
+  const generatingSessions = readGeneratingSessions();
+  if (!generatingSessions.includes(sessionId)) {
+    return false;
+  }
+  unmarkGeneratingSession(sessionId);
+  return true;
+}
+
+function updateInterviewReviewGenerationProgress(progress: InterviewReviewGenerationProgress) {
+  const current = readGeneratingProgress();
+  current[progress.sessionId] = progress;
+  writeGeneratingProgress(current);
+}
+
+function parseNdjsonLines(buffer: string): { lines: string[]; rest: string } {
+  const parts = buffer.split("\n");
+  return {
+    lines: parts.slice(0, -1).filter(Boolean),
+    rest: parts.length > 0 ? parts[parts.length - 1] ?? "" : "",
+  };
+}
+
+export function getInterviewReviewTopicCount(
+  sessionId: string,
+  detail?: ReviewSessionDetail | null
+): number {
+  if (detail?.reportStatus === "ready") {
+    return detail.topics.length;
+  }
+  const snapshot = getSnapshotBySessionId(sessionId);
+  return snapshot?.interviewPlan.plan.length ?? detail?.topics.length ?? 0;
 }
 
 export function getInterviewReviewSessionsSnapshot(): ReviewSessionListItem[] {
@@ -223,46 +307,25 @@ export function getInterviewReviewSessionDetailSnapshot(sessionId: string): Revi
 }
 
 export async function fetchInterviewReviewSessions(): Promise<ReviewSessionListItem[]> {
-  const localItems = getInterviewReviewSessionsSnapshot();
-
-  try {
-    const response = await fetch("/api/interview-reviews");
-    if (!response.ok) {
-      throw new Error(await parseErrorMessage(response));
-    }
-    const data = (await response.json()) as ReviewSessionListResponse;
-    return mergeSessionLists(localItems, data.items ?? []);
-  } catch {
-    return localItems;
-  }
+  return getInterviewReviewSessionsSnapshot();
 }
 
 export async function fetchInterviewReviewSessionById(sessionId: string): Promise<ReviewSessionDetail | null> {
-  const local = getInterviewReviewSessionDetailSnapshot(sessionId);
-
-  try {
-    const response = await fetch(`/api/interview-reviews/${encodeURIComponent(sessionId)}`);
-    if (response.status === 404 || response.status === 409) {
-      return local;
-    }
-    if (!response.ok) {
-      throw new Error(await parseErrorMessage(response));
-    }
-
-    const detail = normalizeReviewDetail((await response.json()) as ReviewSessionDetail);
-    const reports = readStoredReports();
-    reports[sessionId] = detail;
-    writeStoredReports(reports);
-    return detail;
-  } catch {
-    return local;
-  }
+  return getInterviewReviewSessionDetailSnapshot(sessionId);
 }
 
 export async function generateInterviewReviewReport(
   sessionId: string,
-  runtimeConfig?: RuntimeConfig | null
+  runtimeConfig?: RuntimeConfig | null,
+  options?: {
+    onProgress?: (progress: InterviewReviewGenerationProgress) => void;
+  }
 ): Promise<ReviewGenerateReportResponse> {
+  const existing = inFlightReviewGenerations.get(sessionId);
+  if (existing) {
+    return existing;
+  }
+
   const snapshot = getSnapshotBySessionId(sessionId);
   const sanitizedRuntimeConfig = sanitizeRuntimeConfig(runtimeConfig);
   console.info("[interview-review] snapshot lookup", {
@@ -290,38 +353,147 @@ export async function generateInterviewReviewReport(
     topicCount: requestSnapshot?.interviewPlan.plan.length ?? 0,
   });
 
-  const response = await fetch(`/api/interview-reviews/${encodeURIComponent(sessionId)}/generate`, {
-    method: "POST",
-    ...(requestSnapshot
-      ? {
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(requestSnapshot),
+  const task = (async () => {
+    markGeneratingSession(sessionId);
+    try {
+      const response = await fetch(`/api/interview-reviews/${encodeURIComponent(sessionId)}/generate/stream`, {
+        method: "POST",
+        ...(requestSnapshot
+          ? {
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(requestSnapshot),
+            }
+          : {}),
+      });
+
+      if (!response.ok) {
+        const message = await parseErrorMessage(response);
+        console.error("[interview-review] POST /generate failed", {
+          sessionId,
+          status: response.status,
+          message,
+        });
+        throw new Error(message);
+      }
+
+      if (!response.body) {
+        throw new Error("生成复盘时未收到流式响应。");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
         }
-      : {}),
-  });
+        buffer += decoder.decode(value, { stream: true });
+        const parsed = parseNdjsonLines(buffer);
+        buffer = parsed.rest;
 
-  if (!response.ok) {
-    const message = await parseErrorMessage(response);
-    console.error("[interview-review] POST /generate failed", {
-      sessionId,
-      status: response.status,
-      message,
-    });
-    throw new Error(message);
-  }
+        for (const line of parsed.lines) {
+          const event = JSON.parse(line) as
+            | { type: "start"; sessionId: string; totalTopics: number }
+            | { type: "topic_complete"; sessionId: string; currentTopic: number; totalTopics: number; topicName: string }
+            | { type: "done"; sessionId: string; reportStatus: "ready"; detail: ReviewSessionDetail }
+            | { type: "error"; sessionId: string; message: string }
+            | { type: "not_found"; sessionId: string };
 
-  const result = (await response.json()) as ReviewGenerateReportResponse;
-  console.info("[interview-review] POST /generate succeeded", {
-    sessionId,
-    reportStatus: result.reportStatus,
-  });
-  const detail = await fetchInterviewReviewSessionById(sessionId);
-  if (detail) {
-    const reports = readStoredReports();
-    reports[sessionId] = detail;
-    writeStoredReports(reports);
-  }
-  return result;
+          if (event.type === "start") {
+            const progress: InterviewReviewGenerationProgress = {
+              sessionId,
+              totalTopics: event.totalTopics,
+              currentTopic: 0,
+              topicName: "",
+              status: "starting",
+            };
+            updateInterviewReviewGenerationProgress(progress);
+            options?.onProgress?.(progress);
+            continue;
+          }
+
+          if (event.type === "topic_complete") {
+            const progress: InterviewReviewGenerationProgress = {
+              sessionId,
+              totalTopics: event.totalTopics,
+              currentTopic: event.currentTopic,
+              topicName: event.topicName,
+              status: "running",
+            };
+            updateInterviewReviewGenerationProgress(progress);
+            options?.onProgress?.(progress);
+            continue;
+          }
+
+          if (event.type === "done") {
+            console.info("[interview-review] POST /generate succeeded", {
+              sessionId,
+              reportStatus: event.reportStatus,
+            });
+            const detail = normalizeReviewDetail(event.detail);
+            const reports = readStoredReports();
+            reports[sessionId] = detail;
+            writeStoredReports(reports);
+            return {
+              sessionId: event.sessionId,
+              reportStatus: event.reportStatus,
+              detail,
+            };
+          }
+
+          if (event.type === "error") {
+            throw new Error(event.message || "生成复盘失败");
+          }
+
+          if (event.type === "not_found") {
+            throw new Error("Mock interview session not found");
+          }
+        }
+      }
+
+      const tail = buffer.trim();
+      if (tail) {
+        const event = JSON.parse(tail) as
+          | { type: "done"; sessionId: string; reportStatus: "ready"; detail: ReviewSessionDetail }
+          | { type: "error"; sessionId: string; message: string }
+          | { type: "not_found"; sessionId: string };
+
+        if (event.type === "done") {
+          console.info("[interview-review] POST /generate succeeded", {
+            sessionId,
+            reportStatus: event.reportStatus,
+          });
+          const detail = normalizeReviewDetail(event.detail);
+          const reports = readStoredReports();
+          reports[sessionId] = detail;
+          writeStoredReports(reports);
+          return {
+            sessionId: event.sessionId,
+            reportStatus: event.reportStatus,
+            detail,
+          };
+        }
+
+        if (event.type === "error") {
+          throw new Error(event.message || "生成复盘失败");
+        }
+
+        if (event.type === "not_found") {
+          throw new Error("Mock interview session not found");
+        }
+      }
+
+      throw new Error("生成复盘时流式响应提前结束。");
+    } finally {
+      inFlightReviewGenerations.delete(sessionId);
+      unmarkGeneratingSession(sessionId);
+    }
+  })();
+
+  inFlightReviewGenerations.set(sessionId, task);
+  return task;
 }
 
 export async function exportInterviewReviewReport(sessionId: string): Promise<ReviewExportReportResponse> {

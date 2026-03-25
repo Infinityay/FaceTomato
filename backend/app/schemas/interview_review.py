@@ -167,6 +167,7 @@ class ReviewOptimizationRequest(BaseModel):
     sessionId: str
     topicId: str
     message: str
+    topic: ReviewTopic | None = None
     conversation: list[ReviewConversationMessage] = Field(default_factory=list)
     runtimeConfig: RuntimeConfig | None = None
 
@@ -204,6 +205,7 @@ class ReviewOptimizationResponse(BaseModel):
 class ReviewGenerateReportResponse(BaseModel):
     sessionId: str
     reportStatus: ReviewReportStatus
+    detail: ReviewSessionDetail | None = None
 
 
 class ReviewExportReportResponse(BaseModel):
