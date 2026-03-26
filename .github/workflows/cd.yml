@@ -1,0 +1,21 @@
+name: CD
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy to production server
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Run remote deploy script
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            bash /home/deploy/scripts/deploy-facetomato-prod.sh
