@@ -15,6 +15,7 @@ from app.schemas.runtime_config import RuntimeConfig
 StreamMode = Literal["start", "reply"]
 MessageRole = Literal["assistant", "user"]
 MockInterviewCreateStage = Literal["retrieving_evidence", "generating_plan", "session_created"]
+InterviewStyle = Literal["gentle_guidance", "pressure_followup"]
 
 
 OPENING_ROUND_KEYWORDS = ("开场", "自我介绍", "背景", "介绍", "opening", "warm")
@@ -247,6 +248,7 @@ class MockInterviewSessionCreateRequest(BaseModel):
 
     interviewType: InterviewType
     category: Category
+    interviewStyle: InterviewStyle = "gentle_guidance"
     jdText: str = ""
     jdData: JDData | None = None
     resumeData: ResumeData
@@ -299,6 +301,7 @@ class MockInterviewStreamRequest(BaseModel):
     message: Optional[str] = None
     interviewType: InterviewType
     category: Category
+    interviewStyle: InterviewStyle = "gentle_guidance"
     jdText: str = ""
     jdData: JDData | None = None
     resumeSnapshot: ResumeData
@@ -324,6 +327,7 @@ class MockInterviewSessionSnapshot(BaseModel):
     sessionId: str
     interviewType: InterviewType
     category: Category
+    interviewStyle: InterviewStyle = "gentle_guidance"
     status: Literal["ready", "streaming", "completed", "expired"]
     limits: MockInterviewSessionLimits
     jdText: str = ""

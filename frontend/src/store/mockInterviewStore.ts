@@ -12,6 +12,7 @@ import type {
   MockInterviewPlan,
   MockInterviewRetrievalResult,
   MockInterviewSessionSnapshot,
+  MockInterviewStyle,
   MockInterviewState,
   MockInterviewStatus,
   ReflectionResult,
@@ -31,6 +32,7 @@ interface MockInterviewStore {
   pendingAssistantPhase: PendingAssistantPhase;
   selectedInterviewType: InterviewType | "";
   selectedCategory: Category | "";
+  selectedInterviewStyle: MockInterviewStyle;
   limits: MockInterviewLimits | null;
   interviewPlan: MockInterviewPlan | null;
   interviewState: MockInterviewState | null;
@@ -44,6 +46,7 @@ interface MockInterviewStore {
 
   setSelectedInterviewType: (value: InterviewType | "") => void;
   setSelectedCategory: (value: Category | "") => void;
+  setSelectedInterviewStyle: (value: MockInterviewStyle) => void;
   setDraftMessage: (value: string) => void;
   setStartedAt: (value: number | null) => void;
   setCreatingStep: (step: MockInterviewCreatingStep) => void;
@@ -91,6 +94,7 @@ const initialState = {
   pendingAssistantPhase: "idle" as PendingAssistantPhase,
   selectedInterviewType: "" as InterviewType | "",
   selectedCategory: "" as Category | "",
+  selectedInterviewStyle: "gentle_guidance" as MockInterviewStyle,
   limits: null as MockInterviewLimits | null,
   interviewPlan: null as MockInterviewPlan | null,
   interviewState: null as MockInterviewState | null,
@@ -110,6 +114,7 @@ export const useMockInterviewStore = create<MockInterviewStore>()(
 
       setSelectedInterviewType: (value) => set({ selectedInterviewType: value }),
       setSelectedCategory: (value) => set({ selectedCategory: value }),
+      setSelectedInterviewStyle: (value) => set({ selectedInterviewStyle: value }),
       setDraftMessage: (value) => set({ draftMessage: value }),
       setStartedAt: (value) => set({ startedAtMs: value }),
       setCreatingStep: (step) =>
@@ -184,6 +189,7 @@ export const useMockInterviewStore = create<MockInterviewStore>()(
             pendingAssistantPhase: hasActiveStream ? snapshot.pendingAssistantPhase ?? "idle" : "idle",
             selectedInterviewType: snapshot.interviewType,
             selectedCategory: snapshot.category,
+            selectedInterviewStyle: snapshot.interviewStyle ?? "gentle_guidance",
             limits: snapshot.limits,
             interviewPlan: snapshot.interviewPlan,
             interviewState: hasActiveStream ? snapshot.interviewState : restoredInterviewState,
@@ -307,6 +313,7 @@ export const useMockInterviewStore = create<MockInterviewStore>()(
         lastActiveAt: state.lastActiveAt,
         selectedInterviewType: state.selectedInterviewType,
         selectedCategory: state.selectedCategory,
+        selectedInterviewStyle: state.selectedInterviewStyle,
         limits: state.limits,
         interviewPlan: state.interviewPlan,
         interviewState: state.interviewState,

@@ -41,6 +41,7 @@ import type {
   MockInterviewDeveloperTraceEvent,
   MockInterviewSessionResponse,
   MockInterviewSessionSnapshot,
+  MockInterviewStyle,
 } from "@/types/mockInterview";
 
 type RecoverableSessionInboxItem = {
@@ -98,6 +99,19 @@ const emptyRetrieval = {
   items: [],
 };
 
+const INTERVIEW_STYLE_OPTIONS: Array<{ value: MockInterviewStyle; label: string; description: string }> = [
+  {
+    value: "gentle_guidance",
+    label: "温和引导型",
+    description: "更注重鼓励与引导，逐步深入。",
+  },
+  {
+    value: "pressure_followup",
+    label: "追问压力型",
+    description: "更强调连续追问与真实性压实。",
+  },
+];
+
 const getRuntimeConfig = (): RuntimeConfig => {
   const state = useRuntimeSettingsStore.getState();
   return {
@@ -124,6 +138,7 @@ const MockInterviewPage = () => {
     pendingAssistantPhase,
     selectedInterviewType,
     selectedCategory,
+    selectedInterviewStyle,
     limits,
     interviewPlan,
     interviewState,
@@ -133,6 +148,7 @@ const MockInterviewPage = () => {
     creatingStep,
     setSelectedInterviewType,
     setSelectedCategory,
+    setSelectedInterviewStyle,
     setDraftMessage,
     setStartedAt,
     setCreatingStep,
@@ -245,7 +261,7 @@ const MockInterviewPage = () => {
       .catch(() => setSpeechAvailable(false));
   }, [speechAppKey, speechAccessKey]);
 
-  const canStart = Boolean(selectedInterviewType && selectedCategory);
+  const canStart = Boolean(selectedInterviewType && selectedCategory && selectedInterviewStyle);
   const hasPendingLoadingView = Boolean(activePendingSession) && status !== "creating";
   const interviewStarted = Boolean(sessionId) && !(status === "creating" && messages.length === 0);
   const isBusy = status === "creating" || status === "streaming";
@@ -281,6 +297,7 @@ const MockInterviewPage = () => {
         expiresAt: string;
         interviewType: InterviewType;
         category: Category;
+        interviewStyle: MockInterviewStyle;
         retrieval: typeof sourceState.retrieval;
         jdText: string;
         jdData: typeof jdData;
@@ -291,11 +308,12 @@ const MockInterviewPage = () => {
     ): MockInterviewSessionSnapshot | null => {
       const interviewType = overrides.interviewType ?? sourceState.selectedInterviewType;
       const category = overrides.category ?? sourceState.selectedCategory;
+      const interviewStyle = overrides.interviewStyle ?? sourceState.selectedInterviewStyle;
       const resolvedPlan = overrides.interviewPlan ?? sourceState.interviewPlan;
       const resolvedState = overrides.interviewState ?? sourceState.interviewState;
       const resolvedResumeSnapshot = overrides.resumeSnapshot ?? parsedResume;
       const resolvedJdData = Object.prototype.hasOwnProperty.call(overrides, "jdData") ? (overrides.jdData ?? null) : jdData ?? null;
-      if (!resolvedResumeSnapshot || !interviewType || !category || !resolvedPlan || !resolvedState) {
+      if (!resolvedResumeSnapshot || !interviewType || !category || !interviewStyle || !resolvedPlan || !resolvedState) {
         return null;
       }
 
@@ -311,6 +329,7 @@ const MockInterviewPage = () => {
         sessionId: overrides.sessionId ?? sourceState.sessionId ?? "",
         interviewType,
         category,
+        interviewStyle,
         status: resolvedStatus,
         limits: sourceState.limits ?? defaultLimits,
         jdText: overrides.jdText ?? jdText,
@@ -480,6 +499,7 @@ const MockInterviewPage = () => {
         expiresAt: resumed.expiresAt,
         interviewType: resumed.interviewType,
         category: resumed.category,
+        interviewStyle: resumed.interviewStyle ?? "gentle_guidance",
         jdText: resumed.jdText ?? "",
         jdData: resumed.jdData,
         resumeSnapshot: resumed.resumeSnapshot,
@@ -532,6 +552,7 @@ const MockInterviewPage = () => {
           expiresAt: resumed.expiresAt,
           interviewType: resumed.interviewType,
           category: resumed.category,
+          interviewStyle: resumed.interviewStyle ?? "gentle_guidance",
           jdText: resumed.jdText ?? "",
           jdData: resumed.jdData,
           resumeSnapshot: resumed.resumeSnapshot,
@@ -607,6 +628,7 @@ const MockInterviewPage = () => {
       resetSession();
       setSelectedInterviewType(nextPendingSession.interviewType);
       setSelectedCategory(nextPendingSession.category);
+      setSelectedInterviewStyle("gentle_guidance");
       setCreatingStep(nextPendingSession.creatingStep);
       return;
     }
@@ -648,6 +670,7 @@ const MockInterviewPage = () => {
     setError,
     setSearchParams,
     setSelectedCategory,
+    setSelectedInterviewStyle,
     setSelectedInterviewType,
   ]);
 
@@ -716,6 +739,7 @@ const MockInterviewPage = () => {
         mode,
         interviewType: currentState.selectedInterviewType,
         category: currentState.selectedCategory,
+        interviewStyle: currentState.selectedInterviewStyle,
         jdText,
         jdData: jdData ?? null,
         resumeSnapshot: parsedResume,
@@ -875,7 +899,7 @@ const MockInterviewPage = () => {
   };
 
   const startInterview = async (nextJdText: string) => {
-    if (!selectedInterviewType || !selectedCategory || !parsedResume) return;
+    if (!selectedInterviewType || !selectedCategory || !selectedInterviewStyle || !parsedResume) return;
 
     const normalizedJdText = nextJdText.trim();
     if (!normalizedJdText) {
@@ -921,6 +945,7 @@ const MockInterviewPage = () => {
         input: {
           interviewType: selectedInterviewType,
           category: selectedCategory,
+          interviewStyle: selectedInterviewStyle,
           jdText: normalizedJdText,
           jdData: resolvedJdData,
           resumeData: parsedResume,
@@ -991,6 +1016,7 @@ const MockInterviewPage = () => {
         mode: "start",
         interviewType: selectedInterviewType,
         category: selectedCategory,
+        interviewStyle: selectedInterviewStyle,
         jdText: normalizedJdText,
         jdData: createdSessionData.jdData ?? resolvedJdData,
         resumeSnapshot: parsedResume,
@@ -1141,6 +1167,7 @@ const MockInterviewPage = () => {
                     sessionId: createdSessionData.sessionId,
               interviewType: createdSessionData.interviewType,
               category: createdSessionData.category,
+              interviewStyle: selectedInterviewStyle,
               status: nextStatus,
               limits: createdSessionData.limits,
               jdText: normalizedJdText,
@@ -1303,6 +1330,28 @@ const MockInterviewPage = () => {
                           </option>
                         ))}
                       </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label htmlFor="interview-style" className="text-sm font-medium">
+                        面试风格
+                      </label>
+                      <select
+                        id="interview-style"
+                        aria-label="面试风格"
+                        className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-accent/25"
+                        value={selectedInterviewStyle}
+                        onChange={(e) => setSelectedInterviewStyle(e.target.value as MockInterviewStyle)}
+                      >
+                        {INTERVIEW_STYLE_OPTIONS.map((item) => (
+                          <option key={item.value} value={item.value}>
+                            {item.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-muted-foreground">
+                        {INTERVIEW_STYLE_OPTIONS.find((item) => item.value === selectedInterviewStyle)?.description}
+                      </p>
                     </div>
 
                     {error && <p className="text-sm text-destructive">{error}</p>}

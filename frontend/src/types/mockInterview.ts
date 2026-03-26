@@ -3,6 +3,7 @@ export type MockInterviewRole = "assistant" | "user";
 export type MockInterviewStreamMode = "start" | "reply";
 export type MockInterviewCreatingStep = "idle" | "retrieving_evidence" | "generating_plan" | "starting_interview";
 export type PendingAssistantPhase = "idle" | "analyzing_answer";
+export type MockInterviewStyle = "gentle_guidance" | "pressure_followup";
 
 import type { Category, InterviewType } from "./interview";
 import type { ResumeData } from "./resume";
@@ -184,6 +185,7 @@ export interface MockInterviewSessionSnapshot {
   sessionId: string;
   interviewType: InterviewType;
   category: Category;
+  interviewStyle: MockInterviewStyle;
   status: "ready" | "streaming" | "completed" | "expired";
   limits: MockInterviewLimits;
   jdText: string;
@@ -252,6 +254,7 @@ export interface MockInterviewDeveloperReport {
 export interface MockInterviewSessionCreateInput extends RuntimeAwarePayload {
   interviewType: InterviewType;
   category: Category;
+  interviewStyle: MockInterviewStyle;
   jdText: string;
   jdData?: JDData | null;
   resumeData: ResumeData;
@@ -274,6 +277,7 @@ export interface StreamMockInterviewReplyInput extends RuntimeAwarePayload {
   mode: MockInterviewStreamMode;
   interviewType: InterviewType;
   category: Category;
+  interviewStyle: MockInterviewStyle;
   jdText: string;
   jdData: JDData | null;
   resumeSnapshot: ResumeData;

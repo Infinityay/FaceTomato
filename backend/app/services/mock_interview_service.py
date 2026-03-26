@@ -26,6 +26,7 @@ from app.prompts.mock_interview_prompts import get_mock_interview_prompts
 from app.schemas.interview import Category, InterviewData, InterviewType
 from app.schemas.jd import JDData
 from app.schemas.mock_interview import (
+    InterviewStyle,
     MockInterviewAnswerAnalysisStartedEvent,
     MockInterviewCreateProgressEvent,
     MockInterviewDeveloperContext,
@@ -103,6 +104,7 @@ class MockInterviewSession:
     resume_fingerprint: str
     interview_type: InterviewType
     category: Category
+    interview_style: InterviewStyle
     jd_text: str
     jd_data: JDData | None
     resume_snapshot: ResumeData
@@ -650,6 +652,7 @@ class MockInterviewService:
             resume_fingerprint="frontend-only",
             interview_type=request.interviewType,
             category=request.category,
+            interview_style=request.interviewStyle,
             jd_text=self._trim_jd(request.jdText),
             jd_data=request.jdData,
             resume_snapshot=request.resumeSnapshot,
@@ -791,6 +794,19 @@ class MockInterviewService:
         recent_messages = session.messages[-self._limits.contextWindowMessages :]
         return [message.model_dump(mode="json") for message in recent_messages]
 
+    @staticmethod
+    def _get_style_instruction(interview_style: InterviewStyle) -> str:
+        if interview_style == "pressure_followup":
+            return (
+                "追问压力型：保持专业但更有压迫感，优先做真实性核验和连续追问；"
+                "当回答模糊、空泛或自相矛盾时，直接指出并要求给出可验证细节（指标、边界、失败案例、取舍理由），"
+                "在同一 topic 内可适度提高追问密度。"
+            )
+        return (
+            "温和引导型：保持耐心、友好和建设性反馈，先用短问题帮助候选人把答案说完整，再逐步深入；"
+            "在指出问题时语气克制，优先给一次补充表达机会。"
+        )
+
     def _build_interviewer_messages(
         self,
         session: MockInterviewSession,
@@ -803,6 +819,7 @@ class MockInterviewService:
         leetcode_problem = session.interview_plan.leetcode_problem if is_coding_round else ""
         prompt = self.prompts["interviewer"].format(
             domain=session.category.value,
+            style_instruction=self._get_style_instruction(session.interview_style),
             current_round=session.interview_state.currentRound,
             total_rounds=session.interview_plan.total_rounds,
             current_topic=current_round.topic,
