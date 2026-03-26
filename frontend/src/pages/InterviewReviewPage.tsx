@@ -60,6 +60,16 @@ const getScoreBadgeTone = (score: number) => {
   return "border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300";
 };
 
+const getScoreActionTone = (score: number) => {
+  if (score >= 80) {
+    return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/16 dark:text-emerald-300";
+  }
+  if (score >= 60) {
+    return "border-amber-500/30 bg-amber-500/10 text-amber-700 hover:bg-amber-500/16 dark:text-amber-300";
+  }
+  return "border-rose-500/30 bg-rose-500/10 text-rose-700 hover:bg-rose-500/16 dark:text-rose-300";
+};
+
 const topicRubrics: Record<string, RubricPoint[]> = {
   "topic-react-performance": [
     { label: "Performance baseline", keywords: ["metric", "baseline", "lcp", "inp", "cls"] },
@@ -192,6 +202,21 @@ const formatGenerationProgressMessage = (
   return `已完成 ${progress.currentTopic}/${progress.totalTopics} 个 Topic`;
 };
 
+const addLoadingTopicId = (current: Set<string>, topicId: string) => {
+  const next = new Set(current);
+  next.add(topicId);
+  return next;
+};
+
+const removeLoadingTopicId = (current: Set<string>, topicId: string) => {
+  if (!current.has(topicId)) {
+    return current;
+  }
+  const next = new Set(current);
+  next.delete(topicId);
+  return next;
+};
+
 const InterviewReviewPage = () => {
   const runtimeConfig = useRuntimeSettingsStore();
   const [sessions, setSessions] = useState<ReviewSessionListItem[]>(() => getInterviewReviewSessionsSnapshot());
@@ -239,7 +264,7 @@ const InterviewReviewPage = () => {
     () => (selectedTopicDetail ? buildTopicProblemSummary(selectedTopicDetail) : selectedTopic ? buildTopicProblemSummary(selectedTopic) : []),
     [selectedTopic, selectedTopicDetail]
   );
-  const [loadingTopicDetailId, setLoadingTopicDetailId] = useState<string | null>(null);
+  const [loadingTopicDetailIds, setLoadingTopicDetailIds] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     setProblemsExpanded(false);
@@ -254,14 +279,14 @@ const InterviewReviewPage = () => {
     if (!sessionId || !topicId || reportStatus !== "ready" || isGeneratingReport) {
       return;
     }
-    if (topicDetail || loadingTopicDetailId === topicId) {
+    if (topicDetail || loadingTopicDetailIds.has(topicId)) {
       return;
     }
 
-    setLoadingTopicDetailId(topicId);
+    setLoadingTopicDetailIds((current) => addLoadingTopicId(current, topicId));
     void generateInterviewReviewTopicDetail(sessionId, topicId, runtimeConfig)
       .then((result) => {
-        setLoadingTopicDetailId((current) => (current === topicId ? null : current));
+        setLoadingTopicDetailIds((current) => removeLoadingTopicId(current, topicId));
         setSelectedSession((current) => {
           if (!current || current.id !== sessionId) {
             return current;
@@ -276,10 +301,10 @@ const InterviewReviewPage = () => {
         });
       })
       .catch((error) => {
-        setLoadingTopicDetailId((current) => (current === topicId ? null : current));
+        setLoadingTopicDetailIds((current) => removeLoadingTopicId(current, topicId));
         setOptimizationError(error instanceof Error ? error.message : "Failed to generate topic detail.");
       });
-  }, [isGeneratingReport, loadingTopicDetailId, runtimeConfig, selectedSession?.id, selectedSession?.reportStatus, selectedTopic?.id, selectedTopicDetail]);
+  }, [isGeneratingReport, loadingTopicDetailIds, runtimeConfig, selectedSession?.id, selectedSession?.reportStatus, selectedTopic?.id, selectedTopicDetail]);
 
   useEffect(() => {
     if (!selectedSession || !isGeneratingReport) {
@@ -612,7 +637,7 @@ const InterviewReviewPage = () => {
                 {selectedSession.topics.map((topic) => {
                   const isActive = topic.id === (selectedTopic?.id ?? getDefaultTopicId(selectedSession));
                   const detailReady = Boolean(selectedSession.topicDetails[topic.id]);
-                  const detailLoading = loadingTopicDetailId === topic.id;
+                  const detailLoading = loadingTopicDetailIds.has(topic.id);
                   return (
                     <Card key={topic.id} className={cn("rounded-3xl border border-border/70 shadow-sm", isActive && "border-primary/25")}>
                       <CardContent className="space-y-5 p-5 md:p-6">
@@ -629,13 +654,11 @@ const InterviewReviewPage = () => {
                               </Badge>
                               <Button
                                 type="button"
-                                variant={detailReady ? "outline" : "default"}
+                                variant="ghost"
                                 className={cn(
-                                  "rounded-2xl whitespace-nowrap",
+                                  "rounded-2xl whitespace-nowrap border shadow-none focus-visible:ring-0 focus-visible:ring-offset-0",
                                   isGeneratingReport && "cursor-not-allowed opacity-60",
-                                  detailReady
-                                    ? "border-emerald-500/25 bg-emerald-500/8 text-emerald-700 hover:bg-emerald-500/12 dark:text-emerald-300"
-                                    : "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90"
+                                  getScoreActionTone(topic.score)
                                 )}
                                 onClick={() => setSelectedTopicId(topic.id)}
                                 disabled={isGeneratingReport}
@@ -738,7 +761,7 @@ const InterviewReviewPage = () => {
                       </div>
                       {!selectedTopicDetail ? (
                         <div className="rounded-3xl border border-border/70 bg-background px-5 py-6 text-sm text-muted-foreground shadow-sm">
-                          {loadingTopicDetailId === selectedTopic.id ? (
+                          {loadingTopicDetailIds.has(selectedTopic.id) ? (
                             <>
                               <Loader2 className="mr-2 inline h-4 w-4 animate-spin" />
                               正在生成该 Topic 的深度分析...
