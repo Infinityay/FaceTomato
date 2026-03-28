@@ -136,45 +136,87 @@ const baseSnapshot = {
 
 const snapshot = buildSnapshot();
 
-const generatedDetail = {
-  id: "session-1",
-  title: "算法实习生模拟面试复盘",
-  role: "算法实习生",
-  round: "模拟面试",
-  interviewAt: "2026-03-19 18:00",
-  reportStatus: "ready",
-  defaultSelectedTopicId: "topic-session-1-1",
-  overallScore: 91,
-  summary: "后端已基于 snapshot 生成复盘报告。",
-  strengths: ["结构清晰", "回答较完整"],
-  risks: ["量化结果仍可补强"],
-  priority: "优先补量化结果。",
-  topics: [
-    {
-      id: "topic-session-1-1",
-      name: "项目经历",
-      domain: "structured_thinking",
-      score: 91,
-      coreQuestion: "介绍一个项目",
-      assessmentFocus: [
-        "考察候选人是否能结构化拆解项目背景、动作和结果",
-        "考察是否能用量化结果证明项目效果",
-      ],
-      answerHighlights: ["我负责模型训练和评估"],
-      highlightedPoints: ["structured_thinking", "communication"],
-      matchedAnswers: [
-        { point: "考察候选人是否能结构化拆解项目背景、动作和结果", answerHighlightIndex: 0 },
-        { point: "考察是否能用量化结果证明项目效果", answerHighlightIndex: null },
-      ],
-      evaluation: "回答完整。",
-      strengths: ["主线明确"],
-      weaknesses: ["数据指标稍少"],
-      suggestions: ["补充量化结果"],
-      followUps: ["如果追问指标怎么回答？"],
-      optimizedAnswer: "先讲背景，再讲动作和结果。",
-    },
-  ],
+const generatedTopic = {
+  id: "topic-session-1-1",
+  name: "项目经历",
+  domain: "structured_thinking",
+  score: 91,
+  coreQuestion: "介绍一个项目",
+  evaluation: "回答完整。",
+  problems: ["量化结果仍可补强"],
 };
+
+const generatedTopicDetail = {
+  ...generatedTopic,
+  assessmentFocus: [
+    "考察候选人是否能结构化拆解项目背景、动作和结果",
+    "考察是否能用量化结果证明项目效果",
+  ],
+  answerHighlights: ["我负责模型训练和评估"],
+  highlightedPoints: ["structured_thinking", "communication"],
+  matchedAnswers: [
+    { point: "考察候选人是否能结构化拆解项目背景、动作和结果", answerHighlightIndex: 0, status: "covered" },
+    { point: "考察是否能用量化结果证明项目效果", answerHighlightIndex: null, status: "missing" },
+  ],
+  strengths: ["主线明确"],
+  weaknesses: ["数据指标稍少"],
+  suggestions: ["补充量化结果"],
+  followUps: ["如果追问指标怎么回答？"],
+  optimizedAnswer: "先讲背景，再讲动作和结果。",
+};
+
+function buildGeneratedDetail(sessionId = "session-1") {
+  return {
+    id: sessionId,
+    title: "算法实习生模拟面试复盘",
+    role: "算法实习生",
+    round: "模拟面试",
+    interviewAt: "2026-03-19 18:00",
+    reportStatus: "ready",
+    defaultSelectedTopicId: generatedTopic.id,
+    overallScore: 91,
+    summary: "后端已基于 snapshot 生成复盘报告。",
+    strengths: ["结构清晰", "回答较完整"],
+    risks: ["量化结果仍可补强"],
+    priority: "优先补量化结果。",
+    topics: [generatedTopic],
+    topicDetails: {
+      [generatedTopic.id]: generatedTopicDetail,
+    },
+  };
+}
+
+const generatedDetail = buildGeneratedDetail();
+
+function createGenerateStreamResponse(sessionId = "session-1") {
+  const detail = buildGeneratedDetail(sessionId);
+  const events = [
+    { type: "start", sessionId, totalTopics: detail.topics.length },
+    {
+      type: "topic_complete",
+      sessionId,
+      currentTopic: 1,
+      totalTopics: detail.topics.length,
+      topicName: generatedTopic.name,
+      preview: generatedTopic,
+    },
+    { type: "done", sessionId, reportStatus: "ready", detail },
+  ];
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      for (const event of events) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+      }
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
 
 function renderPage() {
   return render(
@@ -232,7 +274,7 @@ describe("InterviewReviewPage", () => {
     });
   });
 
-  it("does not auto-generate a report for unfinished sessions", async () => {
+  it("does not list unfinished sessions for review", async () => {
     localStorage.setItem(
       "face-tomato-mock-interview-recoverable-sessions",
       JSON.stringify([
@@ -245,52 +287,13 @@ describe("InterviewReviewPage", () => {
         },
       ])
     );
-    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith("/api/interview-reviews")) {
-        return new Response(
-          JSON.stringify({
-            items: [
-              {
-                ...generatedDetail,
-                id: "session-unfinished",
-                reportStatus: "pending",
-                overallScore: null,
-                topicCount: 3,
-              },
-            ],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }
-        );
-      }
-      if (url.endsWith("/api/interview-reviews/session-unfinished")) {
-        return new Response(
-          JSON.stringify({
-            ...generatedDetail,
-            id: "session-unfinished",
-            reportStatus: "pending",
-            topics: [],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }
-        );
-      }
-      return new Response("not found", { status: 404 });
-    });
 
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: /查看复盘/i }));
-
-    await screen.findByText("请先完成模拟面试后再生成复盘报告");
-    expect(
-      fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/interview-reviews/session-unfinished/generate"))
-    ).toBe(false);
+    expect(await screen.findByText("选择面试记录")).toBeInTheDocument();
+    expect(screen.getByText('请先在"模拟面试"页面完成模拟面试，完成后此处即可显示面试记录。')).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /查看复盘/i })).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("treats mixed finished snapshots as reviewable when interviewState.closed is true", async () => {
@@ -306,36 +309,19 @@ describe("InterviewReviewPage", () => {
         },
       ])
     );
-    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
 
-      if (url.endsWith("/api/interview-reviews")) {
-        return new Response(JSON.stringify({ items: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+      if (url.endsWith("/api/interview-reviews/session-mixed/generate/stream")) {
+        return createGenerateStreamResponse("session-mixed");
       }
 
-      if (url.endsWith("/api/interview-reviews/session-mixed")) {
-        if (!init?.method || init.method === "GET") {
-          return new Response(
-            JSON.stringify({
-              ...generatedDetail,
-              id: "session-mixed",
-            }),
-            {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
-            }
-          );
-        }
-      }
-
-      if (url.endsWith("/api/interview-reviews/session-mixed/generate")) {
+      if (url.endsWith(`/api/interview-reviews/session-mixed/topics/${generatedTopic.id}/generate-detail`)) {
         return new Response(
           JSON.stringify({
             sessionId: "session-mixed",
-            reportStatus: "ready",
+            topicId: generatedTopic.id,
+            topic: generatedTopicDetail,
           }),
           {
             status: 200,
@@ -350,40 +336,30 @@ describe("InterviewReviewPage", () => {
     renderPage();
 
     await userEvent.click(await screen.findByRole("button", { name: /查看复盘/i }));
+    await userEvent.click(await screen.findByRole("button", { name: "生成报告" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        "/api/interview-reviews/session-mixed/generate",
+        "/api/interview-reviews/session-mixed/generate/stream",
         expect.objectContaining({ method: "POST" })
       );
     });
   });
 
-  it("starts generating the AI report immediately after clicking view review", async () => {
-    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+  it("starts generating the AI report after clicking generate report", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
 
-      if (url.endsWith("/api/interview-reviews")) {
-        return new Response(JSON.stringify({ items: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+      if (url.endsWith("/api/interview-reviews/session-1/generate/stream")) {
+        return createGenerateStreamResponse("session-1");
       }
 
-      if (url.endsWith("/api/interview-reviews/session-1")) {
-        if (!init?.method || init.method === "GET") {
-          return new Response(JSON.stringify(generatedDetail), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-      }
-
-      if (url.endsWith("/api/interview-reviews/session-1/generate")) {
+      if (url.endsWith(`/api/interview-reviews/session-1/topics/${generatedTopic.id}/generate-detail`)) {
         return new Response(
           JSON.stringify({
             sessionId: "session-1",
-            reportStatus: "ready",
+            topicId: generatedTopic.id,
+            topic: generatedTopicDetail,
           }),
           {
             status: 200,
@@ -397,11 +373,12 @@ describe("InterviewReviewPage", () => {
 
     renderPage();
 
-    await userEvent.click((await screen.findAllByRole("button"))[0]);
+    await userEvent.click(await screen.findByRole("button", { name: /查看复盘/i }));
+    await userEvent.click(await screen.findByRole("button", { name: "生成报告" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        "/api/interview-reviews/session-1/generate",
+        "/api/interview-reviews/session-1/generate/stream",
         expect.objectContaining({
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -410,7 +387,7 @@ describe("InterviewReviewPage", () => {
     });
 
     const generateCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).endsWith("/api/interview-reviews/session-1/generate")
+      String(url).endsWith("/api/interview-reviews/session-1/generate/stream")
     );
     expect(generateCall).toBeTruthy();
     expect(JSON.parse(String(generateCall?.[1]?.body))).toMatchObject({
@@ -425,30 +402,19 @@ describe("InterviewReviewPage", () => {
   });
 
   it("does not render the export report button in the top-right area", async () => {
-    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
 
-      if (url.endsWith("/api/interview-reviews")) {
-        return new Response(JSON.stringify({ items: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+      if (url.endsWith("/api/interview-reviews/session-1/generate/stream")) {
+        return createGenerateStreamResponse("session-1");
       }
 
-      if (url.endsWith("/api/interview-reviews/session-1")) {
-        if (!init?.method || init.method === "GET") {
-          return new Response(JSON.stringify(generatedDetail), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-      }
-
-      if (url.endsWith("/api/interview-reviews/session-1/generate")) {
+      if (url.endsWith(`/api/interview-reviews/session-1/topics/${generatedTopic.id}/generate-detail`)) {
         return new Response(
           JSON.stringify({
             sessionId: "session-1",
-            reportStatus: "ready",
+            topicId: generatedTopic.id,
+            topic: generatedTopicDetail,
           }),
           {
             status: 200,
@@ -462,36 +428,26 @@ describe("InterviewReviewPage", () => {
 
     renderPage();
 
-    await userEvent.click((await screen.findAllByRole("button"))[0]);
+    await userEvent.click(await screen.findByRole("button", { name: /查看复盘/i }));
+    await userEvent.click(await screen.findByRole("button", { name: "生成报告" }));
     await screen.findByText("后端已基于 snapshot 生成复盘报告。");
     expect(screen.queryByRole("button", { name: /导出报告/i })).not.toBeInTheDocument();
   });
 
   it("renders one answer card per assessment focus", async () => {
-    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
 
-      if (url.endsWith("/api/interview-reviews")) {
-        return new Response(JSON.stringify({ items: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+      if (url.endsWith("/api/interview-reviews/session-1/generate/stream")) {
+        return createGenerateStreamResponse("session-1");
       }
 
-      if (url.endsWith("/api/interview-reviews/session-1")) {
-        if (!init?.method || init.method === "GET") {
-          return new Response(JSON.stringify(generatedDetail), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-      }
-
-      if (url.endsWith("/api/interview-reviews/session-1/generate")) {
+      if (url.endsWith(`/api/interview-reviews/session-1/topics/${generatedTopic.id}/generate-detail`)) {
         return new Response(
           JSON.stringify({
             sessionId: "session-1",
-            reportStatus: "ready",
+            topicId: generatedTopic.id,
+            topic: generatedTopicDetail,
           }),
           {
             status: 200,
@@ -505,7 +461,8 @@ describe("InterviewReviewPage", () => {
 
     renderPage();
 
-    await userEvent.click((await screen.findAllByRole("button"))[0]);
+    await userEvent.click(await screen.findByRole("button", { name: /查看复盘/i }));
+    await userEvent.click(await screen.findByRole("button", { name: "生成报告" }));
     await screen.findByText("后端已基于 snapshot 生成复盘报告。");
 
     await waitFor(() => {
