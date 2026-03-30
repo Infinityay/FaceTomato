@@ -300,6 +300,100 @@ def test_stream_create_mock_interview_session_route_returns_sse_events(monkeypat
     }
 
 
+def test_stream_create_mock_interview_session_route_accepts_new_shared_category(monkeypatch):
+    monkeypatch.setattr(mock_interview_route, "_build_service", lambda runtime_config_request: StubService())
+
+    response = client.post(
+        "/api/mock-interview/session/stream-create",
+        json={
+            "interviewType": InterviewType.SOCIAL.value,
+            "category": Category.PRODUCT_MANAGER.value,
+            "jdText": "熟悉需求分析与跨团队协作",
+            "jdData": {
+                "basicInfo": {
+                    "company": "美团",
+                    "jobTitle": "产品经理"
+                },
+                "requirements": {
+                    "techStack": ["PRD", "数据分析"]
+                }
+            },
+            "resumeData": {
+                "basicInfo": {
+                    "name": "",
+                    "personalEmail": "",
+                    "phoneNumber": "",
+                    "age": "",
+                    "born": "",
+                    "gender": "",
+                    "desiredPosition": "",
+                    "desiredLocation": [],
+                    "currentLocation": "",
+                    "placeOfOrigin": "",
+                    "rewards": [],
+                },
+                "workExperience": [],
+                "education": [],
+                "projects": [],
+                "academicAchievements": [],
+            },
+        },
+        headers={"Accept": "text/event-stream"},
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert '"category": "产品经理"' in body
+    assert '"interviewType": "社招"' in body
+
+
+def test_stream_create_mock_interview_session_route_accepts_speech_algorithm_category(monkeypatch):
+    monkeypatch.setattr(mock_interview_route, "_build_service", lambda runtime_config_request: StubService())
+
+    response = client.post(
+        "/api/mock-interview/session/stream-create",
+        json={
+            "interviewType": InterviewType.CAMPUS.value,
+            "category": Category.SPEECH_ALGO.value,
+            "jdText": "熟悉语音识别和声学建模",
+            "jdData": {
+                "basicInfo": {
+                    "company": "科大讯飞",
+                    "jobTitle": "语音算法工程师"
+                },
+                "requirements": {
+                    "techStack": ["ASR", "声学模型"]
+                }
+            },
+            "resumeData": {
+                "basicInfo": {
+                    "name": "",
+                    "personalEmail": "",
+                    "phoneNumber": "",
+                    "age": "",
+                    "born": "",
+                    "gender": "",
+                    "desiredPosition": "",
+                    "desiredLocation": [],
+                    "currentLocation": "",
+                    "placeOfOrigin": "",
+                    "rewards": [],
+                },
+                "workExperience": [],
+                "education": [],
+                "projects": [],
+                "academicAchievements": [],
+            },
+        },
+        headers={"Accept": "text/event-stream"},
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert '"category": "语音算法"' in body
+    assert '"interviewType": "校招"' in body
+
+
 def test_stream_mock_interview_route_returns_sse_events(monkeypatch):
     captured = {}
 

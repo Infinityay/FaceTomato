@@ -93,6 +93,45 @@ SAMPLE_ROWS = [
         "result": "null",
         "interview_type": "实习",
     },
+    {
+        "title": "移动端专项面",
+        "content": "iOS 与 Android 性能优化",
+        "publish_time": "2024-03-03 11:00:00",
+        "category": "移动端开发",
+        "source": "nowcoder",
+        "source_id": "nc-mobile-4",
+        "company": "小米",
+        "department": "客户端",
+        "stage": "一面",
+        "result": "offer",
+        "interview_type": "校招",
+    },
+    {
+        "title": "产品经理终面",
+        "content": "需求分析与跨团队协作",
+        "publish_time": "2024-03-04 16:30:00",
+        "category": "产品经理",
+        "source": "boss",
+        "source_id": "boss-pm-5",
+        "company": "美团",
+        "department": "平台产品",
+        "stage": "终面",
+        "result": "offer",
+        "interview_type": "社招",
+    },
+    {
+        "title": "语音算法一面",
+        "content": "语音识别与声学建模",
+        "publish_time": "2024-03-02 09:30:00",
+        "category": "语音算法",
+        "source": "nowcoder",
+        "source_id": "nc-speech-6",
+        "company": "科大讯飞",
+        "department": "语音算法",
+        "stage": "一面",
+        "result": "offer",
+        "interview_type": "校招",
+    },
 ]
 
 
@@ -148,6 +187,25 @@ def test_filter_by_category():
     assert items[0].title == "阿里一面"
 
 
+@pytest.mark.parametrize(
+    ("category", "expected_title"),
+    [
+        (Category.MOBILE, "移动端专项面"),
+        (Category.PRODUCT_MANAGER, "产品经理终面"),
+        (Category.SPEECH_ALGO, "语音算法一面"),
+    ],
+)
+def test_filter_by_new_shared_categories(category: Category, expected_title: str):
+    conn = make_db(SAMPLE_ROWS)
+    svc = DataService(conn=conn)
+
+    items, total = svc.filter_interviews(categories=[category])
+
+    assert total == 1
+    assert items[0].title == expected_title
+    assert items[0].category == category
+
+
 def test_legacy_search_rec_category_is_normalized_and_filterable():
     conn = make_db(
         SAMPLE_ROWS
@@ -178,6 +236,18 @@ def test_legacy_search_rec_category_is_normalized_and_filterable():
     stats = svc.get_stats()
     assert stats["categories"][Category.SEARCH_REC.value] == 1
     assert "搜广推推荐算法" not in stats["categories"]
+
+
+
+def test_get_stats_includes_new_shared_categories():
+    conn = make_db(SAMPLE_ROWS)
+    svc = DataService(conn=conn)
+
+    stats = svc.get_stats()
+
+    assert stats["categories"][Category.MOBILE.value] == 1
+    assert stats["categories"][Category.PRODUCT_MANAGER.value] == 1
+    assert stats["categories"][Category.SPEECH_ALGO.value] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -240,8 +310,8 @@ def test_get_by_id_not_found():
 
 def test_get_neighbors_returns_prev_next():
     conn = make_db(SAMPLE_ROWS)
-    # rows ordered by publish_time DESC: 腾讯(3-05) > 阿里(3-01) > 百度(2-20)
-    # so rank: 1=腾讯, 2=阿里, 3=百度
+    # rows ordered by publish_time DESC:
+    # 腾讯(3-05) > 产品经理(3-04) > 移动端(3-03) > 语音算法(3-02) > 阿里(3-01) > 百度(2-20)
     ali_id = conn.execute("SELECT id FROM interviews WHERE title = '阿里一面'").fetchone()["id"]
 
     svc = DataService(conn=conn)
@@ -250,15 +320,15 @@ def test_get_neighbors_returns_prev_next():
     assert "prev" in neighbors
     assert "next" in neighbors
 
-    # prev (higher publish_time) = 腾讯
+    # prev (higher publish_time) = 语音算法一面
     assert neighbors["prev"] is not None
     prev = neighbors["prev"]
-    assert prev["title"] == "腾讯二面"
+    assert prev["title"] == "语音算法一面"
     assert "id" in prev
     # NeighborItem should only have id and title (no content_hash, no formatted_title)
     assert "content_hash" not in prev
     assert "formatted_title" not in prev
 
-    # next (lower publish_time) = 百度
+    # next (lower publish_time) = 百度实习面
     assert neighbors["next"] is not None
     assert neighbors["next"]["title"] == "百度实习面"

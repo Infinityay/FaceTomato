@@ -610,6 +610,9 @@ describe("MockInterviewPage", () => {
 
     expect(screen.getByRole("combobox", { name: "面试岗位类型" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "面试岗位领域" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "移动端开发" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "产品经理" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "语音算法" })).toBeInTheDocument();
 
     const startButton = screen.getByRole("button", { name: "开始模拟面试" });
     expect(startButton).toBeDisabled();

@@ -387,6 +387,110 @@ async def test_build_plan_messages_includes_retrieval_context(
 
 
 @pytest.mark.anyio
+async def test_build_plan_messages_supports_new_shared_category(
+    service: MockInterviewService,
+    sample_resume: ResumeData,
+):
+    jd_data = JDData(
+        basicInfo=JDBasicInfo(company="美团", jobTitle="产品经理"),
+        requirements=JDRequirements(
+            techStack=["PRD", "数据分析"],
+            mustHave=["熟悉需求拆解"],
+            jobDuties=["推进跨团队协作"],
+        ),
+    )
+    retrieval_result = MockInterviewRetrievalResult(
+        queryText="产品经理\n社招\n需求分析",
+        appliedFilters=MockInterviewRetrievalFilters(
+            category=Category.PRODUCT_MANAGER,
+            interviewType=InterviewType.SOCIAL,
+            company="美团",
+        ),
+        items=[
+            MockInterviewRetrievalItem(
+                interviewId=17,
+                title="美团产品经理二面",
+                company="美团",
+                category=Category.PRODUCT_MANAGER,
+                interviewType=InterviewType.SOCIAL,
+                stage="二面",
+                publishTime="2026-03-01 10:00:00",
+                snippet="关注需求拆解、指标设计与跨团队协同。",
+                score=1.0,
+                reason="公司：美团；类型：社招",
+            )
+        ],
+    )
+    request = MockInterviewSessionCreateRequest(
+        interviewType=InterviewType.SOCIAL,
+        category=Category.PRODUCT_MANAGER,
+        jdText="熟悉需求分析与跨团队协作",
+        jdData=jd_data,
+        resumeData=sample_resume,
+    )
+
+    messages = service._build_plan_messages(request, jd_data, retrieval_result)
+
+    assert len(messages) == 1
+    payload = messages[0].content
+    assert Category.PRODUCT_MANAGER.value in payload
+    assert "美团产品经理二面" in payload
+    assert "需求拆解" in payload
+
+
+@pytest.mark.anyio
+async def test_build_plan_messages_supports_speech_algorithm_category(
+    service: MockInterviewService,
+    sample_resume: ResumeData,
+):
+    jd_data = JDData(
+        basicInfo=JDBasicInfo(company="科大讯飞", jobTitle="语音算法工程师"),
+        requirements=JDRequirements(
+            techStack=["ASR", "声学模型"],
+            mustHave=["熟悉语音识别"],
+            jobDuties=["优化声学建模效果"],
+        ),
+    )
+    retrieval_result = MockInterviewRetrievalResult(
+        queryText="语音算法\n校招\nASR",
+        appliedFilters=MockInterviewRetrievalFilters(
+            category=Category.SPEECH_ALGO,
+            interviewType=InterviewType.CAMPUS,
+            company="科大讯飞",
+        ),
+        items=[
+            MockInterviewRetrievalItem(
+                interviewId=18,
+                title="讯飞语音算法一面",
+                company="科大讯飞",
+                category=Category.SPEECH_ALGO,
+                interviewType=InterviewType.CAMPUS,
+                stage="一面",
+                publishTime="2026-03-02 10:00:00",
+                snippet="关注 ASR、声学模型与解码优化。",
+                score=1.0,
+                reason="公司：科大讯飞；类型：校招",
+            )
+        ],
+    )
+    request = MockInterviewSessionCreateRequest(
+        interviewType=InterviewType.CAMPUS,
+        category=Category.SPEECH_ALGO,
+        jdText="熟悉语音识别和声学建模",
+        jdData=jd_data,
+        resumeData=sample_resume,
+    )
+
+    messages = service._build_plan_messages(request, jd_data, retrieval_result)
+
+    assert len(messages) == 1
+    payload = messages[0].content
+    assert Category.SPEECH_ALGO.value in payload
+    assert "讯飞语音算法一面" in payload
+    assert "声学模型" in payload
+
+
+@pytest.mark.anyio
 async def test_stream_create_session_emits_progress_and_session_created(
     service: MockInterviewService,
     sample_resume: ResumeData,

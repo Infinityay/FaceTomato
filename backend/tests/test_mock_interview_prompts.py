@@ -33,7 +33,7 @@ def test_interview_plan_prompt_contains_required_placeholders_and_rules():
         "八股穿插",
         "AI 能力考查",
         "压力测试",
-        "七个支持领域",
+        "当前支持领域",
         "约 30% 面经",
         "八股考察占比要明显",
         "小问题由面试官根据当前 topic 和上下文动态生成",
@@ -41,6 +41,8 @@ def test_interview_plan_prompt_contains_required_placeholders_and_rules():
         "为什么不选其他方案",
     ):
         assert keyword in INTERVIEW_PLAN_PROMPT
+
+    assert "七个支持领域" not in INTERVIEW_PLAN_PROMPT
 
 
 def test_interviewer_prompt_contains_round_context_and_leetcode_problem():
@@ -69,7 +71,7 @@ def test_interviewer_prompt_contains_round_context_and_leetcode_problem():
         "项目拷打",
         "八股穿插",
         "AI/LLM 提效",
-        "七个领域",
+        "不同领域的考点和追问方式要明显不同",
         "约 30% 内容都会显著考察基础知识",
         "持续穿插基础原理",
         "有限自由度的提问方式",
@@ -80,6 +82,8 @@ def test_interviewer_prompt_contains_round_context_and_leetcode_problem():
         "思考路径与替代方案比较",
     ):
         assert keyword in INTERVIEWER_PROMPT
+
+    assert "七个领域" not in INTERVIEWER_PROMPT
 
     assert "CLOSE_INTERVIEW" in INTERVIEWER_PROMPT
 
