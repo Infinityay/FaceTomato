@@ -7,7 +7,7 @@ Usage:
 This script:
 1. Drops the old interviews table (all old data discarded)
 2. Creates the new table with the updated schema
-3. Imports all JSON files from the source directory (7 categories only)
+3. Imports all JSON files from the supported category directories in the source tree
 """
 
 import argparse
@@ -16,10 +16,13 @@ import sqlite3
 from collections import defaultdict
 from pathlib import Path
 
-# Only these 7 categories are imported
+# Only these supported categories are imported
 VALID_CATEGORIES = [
     "前端开发",
     "后端开发",
+    "移动端开发",
+    "产品经理",
+    "语音算法",
     "大模型应用开发",
     "大模型算法",
     "搜广推算法",
